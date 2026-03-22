@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+*.db
+*.db-journal
+
+# Playwright browser profile
+cf_profile/
+
+# Playwright test artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+
+# Node / frontend
+node_modules/
+
+# Environment
+.env
+.env.local
