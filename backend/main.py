@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import scraper
 import inspectionscrape
 
-DB_PATH = 'autura_inventory.db'
+DB_PATH = 'swiftlot.db'
 
 # Tracks in-progress and completed scrape jobs: auction_id -> "running" | "done" | "failed"
 scrape_status: dict[str, str] = {}

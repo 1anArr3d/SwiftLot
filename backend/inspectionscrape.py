@@ -1,7 +1,7 @@
 import sqlite3
 from playwright.sync_api import sync_playwright
 
-DB_PATH = 'autura_inventory.db'
+DB_PATH = 'swiftlot.db'
 
 def save_history(vin, results):
     if not results: return

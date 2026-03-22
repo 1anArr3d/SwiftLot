@@ -7,7 +7,7 @@ BASE_URL = "https://app.marketplace.autura.com"
 PARALLEL_PAGES = 5  # number of vehicle pages to scrape simultaneously
 
 def init_db():
-    with sqlite3.connect('autura_inventory.db') as conn:
+    with sqlite3.connect('swiftlot.db') as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS vehicles (
             vin TEXT PRIMARY KEY, year TEXT, make TEXT, model TEXT, color TEXT,
             key_status TEXT, catalytic_converter TEXT, start_status TEXT,
@@ -74,7 +74,7 @@ async def scrape_vehicle(browser, href, auctionid, city, conn, lock):
         await page.close()
 
 async def _scrape(auctionid, city):
-    with sqlite3.connect('autura_inventory.db') as conn:
+    with sqlite3.connect('swiftlot.db') as conn:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
