@@ -15,6 +15,11 @@ def init_db():
             last_recorded_odo TEXT, images TEXT)''')
         conn.execute('''CREATE TABLE IF NOT EXISTS odometer_history (
             row_id TEXT PRIMARY KEY, vin TEXT, inspection_date TEXT, mileage INTEGER)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS watchlist (
+            vin TEXT PRIMARY KEY, year TEXT, make TEXT, model TEXT, color TEXT,
+            key_status TEXT, catalytic_converter TEXT, start_status TEXT,
+            engine_type TEXT, transmission TEXT, auction_id TEXT, city TEXT,
+            last_recorded_odo TEXT, images TEXT, liked_at TEXT)''')
         # migrate existing DBs that don't have the images column yet
         try:
             conn.execute("ALTER TABLE vehicles ADD COLUMN images TEXT")
