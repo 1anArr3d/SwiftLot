@@ -154,8 +154,6 @@ const App = () => {
 
   useEffect(() => {
     fetchVehicles();
-    const interval = setInterval(fetchVehicles, 2000);
-    return () => clearInterval(interval);
   }, []);
 
   const years = [...new Set(vehicles.map(c => c.year).filter(Boolean))].sort();
