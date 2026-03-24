@@ -21,7 +21,8 @@ def _run_scrape(auction_id: str, city: str):
                 (auction_id,)
             )
         scrape_status[auction_id] = "done"
-    except Exception:
+    except Exception as e:
+        print(f"[scrape] ERROR for {auction_id}: {e}")
         scrape_status[auction_id] = "failed"
 
 
