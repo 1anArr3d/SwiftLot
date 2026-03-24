@@ -55,30 +55,43 @@ def mark_completed_auctions(conn, seen_ids: set):
     )
 
 
-CARD_JS = """
+STATE_CARD_JS = """
     () => Array.from(document.querySelectorAll('[data-testid="auction-card-item"]'))
-        .map(el => {
+        .map(el => ({
+            auction_id: el.getAttribute('data-auctionid').replace('auction-', ''),
+            region_id:  el.getAttribute('data-regionid'),
+        }))
+"""
+
+CITY_CARD_JS = """
+    () => {
+        const results = [];
+        const sections = Array.from(document.querySelectorAll('.section-upcoming'));
+        document.querySelectorAll('[data-testid="auction-card-item"]').forEach(el => {
+            let seller = '';
+            for (let i = sections.length - 1; i >= 0; i--) {
+                if (sections[i].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
+                    const a = sections[i].querySelector('a[href*="/auctions/series/"]');
+                    if (a) { seller = a.innerText.trim(); }
+                    break;
+                }
+            }
             const calendarLi = el.querySelector('.anticon-calendar')?.closest('li');
-            return {
+            results.push({
                 auction_id:      el.getAttribute('data-auctionid').replace('auction-', ''),
                 region_id:       el.getAttribute('data-regionid'),
                 auction_status:  el.getAttribute('data-auction-status'),
                 vehicles_listed: parseInt(el.getAttribute('data-vehicles-listed') || '0'),
-                seller_name:     el.querySelector('.ant-card-meta-title span')?.innerText?.trim() || '',
+                seller_name:     seller,
                 auction_date:    calendarLi ? calendarLi.innerText.trim() : ''
-            };
-        })
+            });
+        });
+        return results;
+    }
 """
 
 
-async def _scrape_page(page, url: str, label: str) -> list[dict]:
-    await page.goto(url, wait_until="load")
-    try:
-        await page.wait_for_selector('[data-testid="auction-card-item"]', timeout=15000)
-    except Exception:
-        print(f"[discovery] No auction cards found for {label}")
-        return []
-
+async def _scroll_to_end(page):
     prev = 0
     while True:
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -87,20 +100,6 @@ async def _scrape_page(page, url: str, label: str) -> list[dict]:
         if count == prev:
             break
         prev = count
-
-    return await page.evaluate(CARD_JS)
-
-
-async def _get_all_auctions(page, state: str, region_id: str = None) -> list[dict]:
-    all_auctions = await _scrape_page(page, f"{BASE_URL}/auctions/by-state/{state}", state)
-
-    if region_id:
-        all_auctions = [a for a in all_auctions if a['region_id'] == region_id]
-
-    with_vehicles = [a for a in all_auctions if a['vehicles_listed'] > 0]
-    label = region_id or state
-    print(f"[discovery] {len(all_auctions)} total cards for {label}, {len(with_vehicles)} with vehicles")
-    return with_vehicles
 
 
 async def _run_discovery(state: str = "TX", region_id: str = None):
@@ -111,24 +110,50 @@ async def _run_discovery(state: str = "TX", region_id: str = None):
         page = await browser.new_page()
 
         try:
-            label = region_id or state
-            print(f"[discovery] Fetching auctions for {label}...")
-            auctions = await _get_all_auctions(page, state, region_id)
+            # Phase 1: get region_ids from by-state page
+            print(f"[discovery] Fetching region IDs for {state}...")
+            await page.goto(f"{BASE_URL}/auctions/by-state/{state}", wait_until="load")
+            try:
+                await page.wait_for_selector('[data-testid="auction-card-item"]', timeout=15000)
+            except Exception:
+                print(f"[discovery] No cards on by-state/{state} page")
+                return
+            await _scroll_to_end(page)
+            state_cards = await page.evaluate(STATE_CARD_JS)
+            region_ids = sorted(set(c['region_id'] for c in state_cards if c['region_id']))
+            if region_id:
+                region_ids = [r for r in region_ids if r == region_id]
+            print(f"[discovery] Regions: {region_ids}")
+
+            # Phase 2: scrape each city page for full auction list
+            all_auctions = []
+            for rid in region_ids:
+                url = f"{BASE_URL}/auctions/{rid}"
+                await page.goto(url, wait_until="load")
+                try:
+                    await page.wait_for_selector('[data-testid="auction-card-item"]', timeout=15000)
+                except Exception:
+                    print(f"[discovery] [{rid}] No cards found")
+                    continue
+                await _scroll_to_end(page)
+                cards = await page.evaluate(CITY_CARD_JS)
+                print(f"[discovery] [{rid}] {len(cards)} cards")
+                all_auctions.extend(cards)
+
+            with_vehicles = [a for a in all_auctions if a['vehicles_listed'] > 0]
+            print(f"[discovery] {len(all_auctions)} total, {len(with_vehicles)} with vehicles")
 
             all_seen_ids = set()
-
             with sqlite3.connect(DB_PATH) as conn:
-                for a in auctions:
+                for a in with_vehicles:
                     upsert_auction(conn, a)
                     all_seen_ids.add(a['auction_id'])
-
                 conn.commit()
-
                 if all_seen_ids:
                     mark_completed_auctions(conn, all_seen_ids)
                     conn.commit()
 
-            print(f"[discovery] Saved {len(auctions)} auctions.")
+            print(f"[discovery] Saved {len(with_vehicles)} auctions.")
 
         except Exception as e:
             print(f"[discovery] Error: {e}")
