@@ -10,9 +10,7 @@ const AuctionDetailPage = () => {
   const navigate = useNavigate();
   const [vehicles, setVehicles] = useState([]);
   const [watchlistVins, setWatchlistVins] = useState(new Set());
-  const [scrapeStatus, setScrapeStatus] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [loadingVins, setLoadingVins] = useState(new Set());
   const [expandedVin, setExpandedVin] = useState(null);
   const [yearRange, setYearRange] = useState([null, null]);
   const [filters, setFilters] = useState({
@@ -20,51 +18,16 @@ const AuctionDetailPage = () => {
     engine_type: new Set(), transmission: new Set(),
   });
 
-  const fetchVehicles = () => {
+  useEffect(() => {
     fetch(`${API}/auctions/${id}/vehicles`)
       .then(r => r.json())
       .then(setVehicles)
       .catch(console.error);
-  };
-
-  useEffect(() => {
-    fetchVehicles();
     fetch(`${API}/watchlist`)
       .then(r => r.json())
       .then(data => setWatchlistVins(new Set(data.map(v => v.vin))))
       .catch(console.error);
   }, [id]);
-
-  const handleScrape = async () => {
-    setScrapeStatus('running');
-    try {
-      const res = await fetch(`${API}/scrape/${id}`, { method: 'POST' });
-      if (!res.ok) { setScrapeStatus('failed'); return; }
-      const poll = setInterval(async () => {
-        try {
-          const r = await fetch(`${API}/scrape/${id}/status`);
-          const data = await r.json();
-          setScrapeStatus(data.status);
-          if (data.status !== 'running') {
-            clearInterval(poll);
-            if (data.status === 'done') fetchVehicles();
-          }
-        } catch { clearInterval(poll); setScrapeStatus('failed'); }
-      }, 2000);
-    } catch {
-      setScrapeStatus('failed');
-    }
-  };
-
-  const handleInspectVin = async (e, vin) => {
-    e.stopPropagation();
-    setLoadingVins(prev => new Set(prev).add(vin));
-    try {
-      await fetch(`${API}/inspectionscrape/${vin}`, { method: 'POST' });
-    } finally {
-      setLoadingVins(prev => { const s = new Set(prev); s.delete(vin); return s; });
-    }
-  };
 
   const toggleWatchlist = async (e, vin) => {
     e.stopPropagation();
@@ -152,13 +115,6 @@ const AuctionDetailPage = () => {
             <div className="vehicle-count">{filteredVehicles.length} / {vehicles.length} Units</div>
           </div>
           <div className="controls">
-            <button
-              onClick={handleScrape}
-              className={`btn-start ${scrapeStatus === 'running' ? 'btn-running' : ''}`}
-              disabled={scrapeStatus === 'running'}
-            >
-              {scrapeStatus === 'running' ? 'Scraping...' : scrapeStatus === 'done' ? 'Done ✓' : scrapeStatus === 'failed' ? 'Failed ✗' : 'Scrape'}
-            </button>
             <input
               placeholder="Search..."
               className="input-search"
@@ -227,15 +183,6 @@ const AuctionDetailPage = () => {
                                 <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}</span></div>
                               )}
                             </div>
-                            {car.city?.endsWith('-TX') && (
-                              <button
-                                onClick={e => handleInspectVin(e, car.vin)}
-                                disabled={loadingVins.has(car.vin)}
-                                className={`btn-inspect ${loadingVins.has(car.vin) ? 'loading' : ''}`}
-                              >
-                                {loadingVins.has(car.vin) ? 'Scraping...' : 'Inspect VIN'}
-                              </button>
-                            )}
                           </div>
                         </div>
                       </td>
@@ -244,7 +191,7 @@ const AuctionDetailPage = () => {
                 ];
               })}
               {filteredVehicles.length === 0 && (
-                <tr><td colSpan={COLS} className="empty-msg">No vehicles. Click Scrape to load.</td></tr>
+                <tr><td colSpan={COLS} className="empty-msg">No vehicles available.</td></tr>
               )}
             </tbody>
           </table>

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+from datetime import date
 from playwright.async_api import async_playwright
 
 BASE_URL = "https://app.marketplace.autura.com"
@@ -26,9 +27,17 @@ def init_db():
         except Exception:
             pass
 
+def _format_odo(raw_odo):
+    if not raw_odo:
+        return None
+    numeric = ''.join(c for c in raw_odo.split('(')[0] if c.isdigit() or c == ',').replace(',', '').strip()
+    if not numeric:
+        return None
+    return f"{date.today().strftime('%m/%d/%Y')}: {int(numeric):,}"
+
 def save_vehicle(conn, vehicle, auction_id, city, images_json):
     raw_odo = vehicle.get("Odometer") or vehicle.get("Odometer Reading") or vehicle.get("Miles")
-    listing_odo = raw_odo.split(" (")[0].strip() if raw_odo else None
+    listing_odo = _format_odo(raw_odo)
     data = (
         vehicle.get("VIN"), vehicle.get("Year"), vehicle.get("Make"),
         vehicle.get("Model"), vehicle.get("Color"), vehicle.get("Key status"),

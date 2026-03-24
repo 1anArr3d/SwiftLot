@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from db import query, get_db
 from models import JobStatus
 from config import DB_PATH
-from state import scrape_status, discovery_status
+from state import scrape_status, discovery_status, inspection_status
 import scraper
 import inspectionscrape
 import discovery
@@ -20,6 +20,16 @@ def _run_scrape(auction_id: str, city: str):
                 "UPDATE auctions SET last_scraped_count = vehicles_listed WHERE auction_id = ?",
                 (auction_id,)
             )
+
+        if city and city.endswith('-TX'):
+            rows = query(
+                "SELECT vin FROM vehicles WHERE auction_id = ? AND last_recorded_odo IS NULL",
+                (auction_id,)
+            )
+            for row in rows:
+                print(f"[scrape] Running inspection for {row['vin']}")
+                inspectionscrape.run_inspection_scrape(row["vin"])
+
         scrape_status[auction_id] = "done"
     except Exception as e:
         print(f"[scrape] ERROR for {auction_id}: {e}")
@@ -54,10 +64,41 @@ def get_scrape_status(auction_id: str):
     return {"id": auction_id, "status": status}
 
 
+def _run_inspection(vin: str):
+    try:
+        inspection_status[vin] = "running"
+        inspectionscrape.run_inspection_scrape(vin)
+        inspection_status[vin] = "done"
+    except Exception as e:
+        print(f"[inspection] ERROR for {vin}: {e}")
+        inspection_status[vin] = "failed"
+
+
 @router.post("/inspectionscrape/{vin}")
 def start_inspection(vin: str, background_tasks: BackgroundTasks):
-    background_tasks.add_task(inspectionscrape.run_inspection_scrape, vin)
+    background_tasks.add_task(_run_inspection, vin)
     return {"status": "started", "vin": vin}
+
+
+@router.get("/inspectionscrape/{vin}/status", response_model=JobStatus)
+def get_inspection_status(vin: str):
+    status = inspection_status.get(vin)
+    if status is None:
+        raise HTTPException(status_code=404, detail="No inspection job found")
+    return {"id": vin, "status": status}
+
+
+@router.post("/pipeline/run")
+def run_full_pipeline(background_tasks: BackgroundTasks, state: str = "TX"):
+    background_tasks.add_task(_run_pipeline, state)
+    return {"status": "started", "state": state}
+
+
+def _run_pipeline(state: str):
+    from scheduler import scheduled_discovery_and_scrape
+    print(f"[pipeline] Running full pipeline for {state}...")
+    scheduled_discovery_and_scrape()
+    print(f"[pipeline] Done.")
 
 
 @router.post("/discovery/run")

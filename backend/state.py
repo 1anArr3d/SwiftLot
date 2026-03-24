@@ -3,3 +3,4 @@
 
 scrape_status: dict[str, str] = {}
 discovery_status: dict[str, str] = {}
+inspection_status: dict[str, str] = {}
