@@ -6,7 +6,7 @@ from scheduler import create_scheduler
 import scraper
 import discovery
 
-from routers import auctions, vehicles, watchlist, scraping
+from routes import router
 
 
 @asynccontextmanager
@@ -33,10 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auctions.router)
-app.include_router(vehicles.router)
-app.include_router(watchlist.router)
-app.include_router(scraping.router)
+app.include_router(router)
 
 
 if __name__ == "__main__":

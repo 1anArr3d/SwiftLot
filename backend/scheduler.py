@@ -2,7 +2,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from db import query, get_db
 from state import scrape_status
-from routers.scraping import _run_scrape
+from routes import _run_scrape
 import discovery
 
 
