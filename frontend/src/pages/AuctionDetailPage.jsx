@@ -106,22 +106,22 @@ const AuctionDetailPage = () => {
       </aside>
 
       <div className="main-content">
-        <header className="main-header">
-          <div className="header-info">
+        <div className="page-header">
+          <div className="page-header-left">
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <button className="btn-back" onClick={() => navigate('/auctions')}>← Back</button>
-              <h1>{id}</h1>
+              <h1 className="page-title">{id}</h1>
             </div>
-            <div className="vehicle-count">{filteredVehicles.length} / {vehicles.length} Units</div>
+            <span className="page-subtitle">{filteredVehicles.length} / {vehicles.length} units</span>
           </div>
-          <div className="controls">
-            <input
-              placeholder="Search..."
-              className="input-search"
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </header>
+        </div>
+        <div className="controls">
+          <input
+            placeholder="Search..."
+            className="input-search"
+            onChange={e => setSearchTerm(e.target.value)}
+          />
+        </div>
 
         <div className="table-container">
           <table className="vehicle-table">
