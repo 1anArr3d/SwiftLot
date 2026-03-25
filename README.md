@@ -1,6 +1,6 @@
 # SwiftLot
 
-A self-running auction inventory pipeline for Texas salvage auctions. Automatically discovers upcoming auctions, scrapes listed vehicles, and enriches each VIN with Texas state inspection odometer history. Built to replace manual research with a clean, searchable interface.
+A data pipeline and inventory browser for vehicle auctions on the Autura Marketplace. Discovers upcoming auctions, scrapes listed vehicles, and enriches each VIN with Texas state inspection odometer history — all on a automated schedule.
 
 ## Features
 
@@ -25,16 +25,12 @@ backend/
   config.py         # Environment config (.env loader)
   db.py             # SQLite connection and query helpers
   models.py         # Pydantic response models
-  state.py          # Shared in-memory job status tracking
-  scheduler.py      # APScheduler — 3x daily pipeline
-  scraper.py        # Async Playwright auction scraper
+  state.py             # Shared in-memory job status tracking
+  scheduler.py         # APScheduler — 3x daily pipeline
+  scraper.py           # Async Playwright auction scraper
   inspectionscrape.py  # Sync Playwright TX inspection scraper
-  discovery.py      # Discovers auctions by state
-  routers/
-    auctions.py     # GET /api/v1/auctions, GET /api/v1/auctions/:id/vehicles
-    vehicles.py     # GET/DELETE /api/v1/vehicles
-    watchlist.py    # GET/POST/DELETE /api/v1/watchlist/:vin
-    scraping.py     # Scrape, inspection, discovery, and pipeline endpoints
+  discovery.py         # Discovers auctions by state
+  routes.py            # All API route handlers
 
 frontend/
   src/
@@ -97,10 +93,8 @@ App at `http://localhost:5173`
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/auctions` | All discovered auctions |
+| GET | `/api/v1/auctions/:id` | Single auction |
 | GET | `/api/v1/auctions/:id/vehicles` | Vehicles for a specific auction |
-| DELETE | `/api/v1/auctions` | Clear all auctions and vehicles |
-| GET | `/api/v1/vehicles` | All vehicles |
-| DELETE | `/api/v1/vehicles` | Clear all vehicles |
 | GET | `/api/v1/watchlist` | Saved watchlist vehicles |
 | POST | `/api/v1/watchlist/:vin` | Add vehicle to watchlist |
 | DELETE | `/api/v1/watchlist/:vin` | Remove vehicle from watchlist |
