@@ -8,7 +8,6 @@ class Auction(BaseModel):
     seller_name: Optional[str] = None
     auction_status: Optional[str] = None
     vehicles_listed: Optional[int] = None
-    auction_date: Optional[str] = None
     last_discovered: Optional[str] = None
     last_scraped_count: Optional[int] = None
 
@@ -28,6 +27,8 @@ class Vehicle(BaseModel):
     city: Optional[str] = None
     last_recorded_odo: Optional[str] = None
     images: Optional[str] = None
+    vehicle_id: Optional[str] = None
+    fuel_type: Optional[str] = None
 
 
 class WatchlistVehicle(Vehicle):

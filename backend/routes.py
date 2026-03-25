@@ -15,49 +15,31 @@ router = APIRouter(prefix="/api/v1")
 
 @router.get("/auctions", response_model=list[Auction], tags=["auctions"])
 def get_auctions():
-    rows = query("SELECT * FROM auctions ORDER BY auction_date")
+    rows = query("SELECT * FROM auctions ORDER BY seller_name")
     return [dict(row) for row in rows]
 
 
-@router.delete("/auctions", tags=["auctions"])
-def clear_auctions():
-    with get_db() as conn:
-        conn.execute("DELETE FROM vehicles")
-        conn.execute("DELETE FROM auctions")
-    return {"status": "success", "message": "All auctions and vehicles cleared"}
+@router.get("/auctions/{auction_id}", response_model=Auction, tags=["auctions"])
+def get_auction(auction_id: str):
+    row = query("SELECT * FROM auctions WHERE auction_id = ?", (auction_id,), one=True)
+    if not row:
+        raise HTTPException(status_code=404, detail="Auction not found")
+    return dict(row)
 
 
 @router.get("/auctions/{auction_id}/vehicles", response_model=list[Vehicle], tags=["auctions"])
 def get_auction_vehicles(auction_id: str):
     rows = query("SELECT * FROM vehicles WHERE auction_id = ?", (auction_id,))
-    if rows is None:
-        raise HTTPException(status_code=404, detail="Auction not found")
     return [dict(row) for row in rows]
 
 
 # ── Vehicles ──────────────────────────────────────────────────────────────────
 
-@router.get("/vehicles", response_model=list[Vehicle], tags=["vehicles"])
-def get_vehicles():
-    rows = query("SELECT * FROM vehicles")
-    return [dict(row) for row in rows]
-
 
 @router.get("/vehicles/{vin}/odometer", response_model=list[OdometerEntry], tags=["vehicles"])
 def get_odometer_history(vin: str):
-    rows = query(
-        "SELECT * FROM odometer_history WHERE vin = ? ORDER BY inspection_date DESC",
-        (vin,)
-    )
+    rows = query("SELECT * FROM odometer_history WHERE vin = ? ORDER BY inspection_date DESC", (vin,))
     return [dict(row) for row in rows]
-
-
-@router.delete("/vehicles", tags=["vehicles"])
-def clear_vehicles():
-    with get_db() as conn:
-        conn.execute("DELETE FROM vehicles")
-        conn.execute("DELETE FROM odometer_history")
-    return {"status": "success", "message": "All vehicles cleared"}
 
 
 # ── Watchlist ─────────────────────────────────────────────────────────────────
@@ -137,15 +119,14 @@ def _run_discovery(key: str, state: str, region_id: str = None):
         discovery_status[key] = "running"
         discovery.run_discovery(state, region_id)
         discovery_status[key] = "done"
-    except Exception:
+    except Exception as e:
+        print(f"[discovery] ERROR: {e}")
         discovery_status[key] = "failed"
 
 
 def _run_pipeline(state: str):
     from scheduler import scheduled_discovery_and_scrape
-    print(f"[pipeline] Running full pipeline for {state}...")
     scheduled_discovery_and_scrape()
-    print(f"[pipeline] Done.")
 
 
 @router.post("/scrape/{auction_id}", tags=["jobs"])

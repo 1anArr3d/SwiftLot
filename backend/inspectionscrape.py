@@ -1,8 +1,6 @@
 import sqlite3
-import time
 from playwright.sync_api import sync_playwright
-
-DB_PATH = 'swiftlot.db'
+from config import DB_PATH
 
 
 def save_history(vin, results):
@@ -89,9 +87,4 @@ def _attempt_inspection(vin, p):
 
 def run_inspection_scrape(vin):
     with sync_playwright() as p:
-        for attempt in range(1, 3):
-            print(f"[inspection] Attempt {attempt} for {vin}")
-            if _attempt_inspection(vin, p):
-                return
-            if attempt < 2:
-                time.sleep(3)
+        _attempt_inspection(vin, p)

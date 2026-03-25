@@ -2,9 +2,9 @@ import asyncio
 import sqlite3
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright
+from config import DB_PATH
 
 BASE_URL = "https://app.marketplace.autura.com"
-DB_PATH = "swiftlot.db"
 
 
 def init_db():
@@ -15,25 +15,21 @@ def init_db():
             seller_name  TEXT,
             auction_status TEXT,
             vehicles_listed INTEGER,
-            auction_date TEXT,
             last_discovered TEXT,
             last_scraped_count INTEGER
         )''')
-        try:
-            conn.execute("ALTER TABLE auctions ADD COLUMN last_scraped_count INTEGER")
-        except Exception:
-            pass
+
 
 
 def upsert_auction(conn, auction):
     conn.execute('''
         INSERT INTO auctions
-            (auction_id, region_id, seller_name, auction_status, vehicles_listed, auction_date, last_discovered)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (auction_id, region_id, seller_name, auction_status, vehicles_listed, last_discovered)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(auction_id) DO UPDATE SET
+            seller_name     = excluded.seller_name,
             auction_status  = excluded.auction_status,
             vehicles_listed = excluded.vehicles_listed,
-            auction_date    = excluded.auction_date,
             last_discovered = excluded.last_discovered
     ''', (
         auction['auction_id'],
@@ -41,7 +37,6 @@ def upsert_auction(conn, auction):
         auction['seller_name'],
         auction['auction_status'],
         auction['vehicles_listed'],
-        auction['auction_date'],
         datetime.now(timezone.utc).isoformat(),
     ))
 
@@ -76,14 +71,12 @@ CITY_CARD_JS = """
                     break;
                 }
             }
-            const calendarLi = el.querySelector('.anticon-calendar')?.closest('li');
             results.push({
                 auction_id:      el.getAttribute('data-auctionid').replace('auction-', ''),
                 region_id:       el.getAttribute('data-regionid'),
                 auction_status:  el.getAttribute('data-auction-status'),
                 vehicles_listed: parseInt(el.getAttribute('data-vehicles-listed') || '0'),
                 seller_name:     seller,
-                auction_date:    calendarLi ? calendarLi.innerText.trim() : ''
             });
         });
         return results;

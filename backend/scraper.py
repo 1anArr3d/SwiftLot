@@ -3,17 +3,18 @@ import json
 import sqlite3
 from datetime import date
 from playwright.async_api import async_playwright
+from config import DB_PATH
 
 BASE_URL = "https://app.marketplace.autura.com"
 PARALLEL_PAGES = 5  # number of vehicle pages to scrape simultaneously
 
 def init_db():
-    with sqlite3.connect('swiftlot.db') as conn:
+    with sqlite3.connect(DB_PATH) as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS vehicles (
             vin TEXT PRIMARY KEY, year TEXT, make TEXT, model TEXT, color TEXT,
             key_status TEXT, catalytic_converter TEXT, start_status TEXT,
             engine_type TEXT, transmission TEXT, auction_id TEXT, city TEXT,
-            last_recorded_odo TEXT, images TEXT)''')
+            last_recorded_odo TEXT, images TEXT, vehicle_id TEXT, fuel_type TEXT)''')
         conn.execute('''CREATE TABLE IF NOT EXISTS odometer_history (
             row_id TEXT PRIMARY KEY, vin TEXT, inspection_date TEXT, mileage INTEGER)''')
         conn.execute('''CREATE TABLE IF NOT EXISTS watchlist (
@@ -21,11 +22,6 @@ def init_db():
             key_status TEXT, catalytic_converter TEXT, start_status TEXT,
             engine_type TEXT, transmission TEXT, auction_id TEXT, city TEXT,
             last_recorded_odo TEXT, images TEXT, liked_at TEXT)''')
-        # migrate existing DBs that don't have the images column yet
-        try:
-            conn.execute("ALTER TABLE vehicles ADD COLUMN images TEXT")
-        except Exception:
-            pass
 
 def _format_odo(raw_odo):
     if not raw_odo:
@@ -43,13 +39,19 @@ def save_vehicle(conn, vehicle, auction_id, city, images_json):
         vehicle.get("Model"), vehicle.get("Color"), vehicle.get("Key status"),
         vehicle.get("Catalytic Converter"), vehicle.get("Start status"),
         vehicle.get("Engine type"), vehicle.get("Transmission"),
-        str(auction_id), city, listing_odo, images_json
+        str(auction_id), city, listing_odo, images_json,
+        vehicle.get("Vehicle Id"), vehicle.get("Fuel Type"),
     )
     conn.execute('''
         INSERT INTO vehicles (vin, year, make, model, color, key_status,
-        catalytic_converter, start_status, engine_type, transmission, auction_id, city, last_recorded_odo, images)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(vin) DO UPDATE SET auction_id=excluded.auction_id, images=excluded.images
+        catalytic_converter, start_status, engine_type, transmission, auction_id, city,
+        last_recorded_odo, images, vehicle_id, fuel_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(vin) DO UPDATE SET
+            auction_id=excluded.auction_id,
+            images=excluded.images,
+            vehicle_id=excluded.vehicle_id,
+            fuel_type=excluded.fuel_type
     ''', data)
 
 async def scrape_vehicle(browser, href, auctionid, city, conn, lock):
@@ -88,7 +90,7 @@ async def scrape_vehicle(browser, href, auctionid, city, conn, lock):
         await page.close()
 
 async def _scrape(auctionid, city):
-    with sqlite3.connect('swiftlot.db') as conn:
+    with sqlite3.connect(DB_PATH) as conn:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
