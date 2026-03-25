@@ -18,15 +18,15 @@ const ImageCycler = ({ images, large = false }) => {
     return () => window.removeEventListener('keydown', onKey);
   }, [lightbox, images.length]);
 
-  if (!images || images.length === 0) return <div className={`no-img ${large ? 'no-img-large' : ''}`}>No Photos</div>;
+  if (!images || images.length === 0) return <div className={`no-img${large ? ' large' : ''}`}>No Photos</div>;
   return (
     <>
-      <div className={`img-cycler ${large ? 'img-cycler-large' : ''}`}>
+      <div className={`img-cycler${large ? ' large' : ''}`}>
         <div
-          className={`cycler-img-wrap ${large ? 'cycler-img-wrap-large' : ''}`}
+          className={`cycler-img-wrap${large ? ' large' : ''}`}
           onClick={large ? (e) => { e.stopPropagation(); setLightbox(true); } : undefined}
         >
-          <img src={images[idx]} alt="vehicle" className={`cycler-img ${large ? 'cycler-img-large' : ''}`} />
+          <img src={images[idx]} alt="vehicle" className="cycler-img" />
         </div>
         {images.length > 1 && (
           <div className="cycler-controls">
