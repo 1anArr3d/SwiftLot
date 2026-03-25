@@ -8,9 +8,15 @@ const STATUS_LABEL = {
   'completed':    'Closed',
 };
 
+const REGION_LABEL = {
+  'SA-TX': 'San Antonio, TX',
+  'AUS-TX': 'Austin, TX',
+  'DL-TX': 'Dallas – Fort Worth, TX',
+  'EP-TX': 'El Paso, TX',
+};
+
 const AuctionsPage = () => {
   const [auctions, setAuctions] = useState([]);
-  const [filter, setFilter] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -20,80 +26,86 @@ const AuctionsPage = () => {
       .catch(console.error);
   }, []);
 
+  // Group by region
   const regions = [...new Set(auctions.map(a => a.region_id))].sort();
+  const byRegion = regions.reduce((acc, r) => {
+    acc[r] = auctions.filter(a => a.region_id === r);
+    return acc;
+  }, {});
 
-  const visible = filter
-    ? auctions.filter(a => a.region_id === filter)
-    : auctions;
-
-  const withVehicles = visible.filter(a => a.vehicles_listed > 0);
-  const empty = visible.length === 0;
+  if (auctions.length === 0) {
+    return (
+      <div className="page-content">
+        <div className="empty-msg">No auctions found. Run discovery to populate.</div>
+      </div>
+    );
+  }
 
   return (
     <div className="page-content">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1 className="page-title">Auctions</h1>
-          <span className="page-subtitle">{withVehicles.length} with vehicles · {visible.length} total</span>
-        </div>
-        {regions.length > 1 && (
-          <div className="region-tabs">
-            <button
-              className={`region-tab${!filter ? ' active' : ''}`}
-              onClick={() => setFilter('')}
-            >
-              All
-            </button>
-            {regions.map(r => (
-              <button
-                key={r}
-                className={`region-tab${filter === r ? ' active' : ''}`}
-                onClick={() => setFilter(r)}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      {regions.map(regionId => {
+        const regionAuctions = byRegion[regionId];
+        const label = REGION_LABEL[regionId] || regionId;
 
-      <div className="auction-grid">
-        {visible.map(a => (
-          <div
-            key={a.auction_id}
-            className={`auction-card${a.vehicles_listed > 0 ? ' has-vehicles' : ''}`}
-            onClick={() => navigate(`/auctions/${a.auction_id}`)}
-          >
-            <div className="auction-card-top">
-              <span className={`status-badge status-${a.auction_status}`}>
-                {STATUS_LABEL[a.auction_status] ?? a.auction_status}
-              </span>
-              <span className="auction-card-region">{a.region_id}</span>
-            </div>
-
-            <div className="auction-card-seller">
-              {a.seller_name || a.auction_id}
-            </div>
-
-            <div className="auction-card-info">
-              <div className="auction-card-info-row">
-                <span className="info-icon">📅</span>
-                <span>{a.auction_date || '—'}</span>
-              </div>
-              <div className="auction-card-info-row">
-                <span className="info-icon">🚗</span>
-                <span className={a.vehicles_listed > 0 ? 'vehicles-count' : 'vehicles-none'}>
-                  {a.vehicles_listed > 0 ? `${a.vehicles_listed} vehicles` : 'No vehicles listed'}
-                </span>
+        return (
+          <div key={regionId} className="region-section">
+            <div className="region-hero">
+              <div className="region-hero-overlay">
+                <h2 className="region-hero-title">{label}</h2>
               </div>
             </div>
-          </div>
-        ))}
 
-        {empty && (
-          <div className="empty-msg">No auctions found. Run discovery to populate.</div>
-        )}
-      </div>
+            <div className="region-section-header">
+              <span className="region-section-label">Upcoming auctions</span>
+            </div>
+
+            <div className="auction-grid">
+              {regionAuctions.map(a => (
+                <div
+                  key={a.auction_id}
+                  className={`auction-card${a.vehicles_listed > 0 ? ' has-vehicles' : ''}`}
+                  onClick={() => navigate(`/auctions/${a.auction_id}`)}
+                >
+                  <div className="auction-card-top">
+                    <div className="auction-card-seller">{a.seller_name || a.auction_id}</div>
+                    <span className={`status-badge status-${a.auction_status}`}>
+                      {STATUS_LABEL[a.auction_status] ?? a.auction_status}
+                    </span>
+                  </div>
+
+                  <div className="auction-card-divider" />
+
+                  <div className="auction-card-info">
+                    <div className="auction-card-info-row">
+                      <span className="info-label">Vehicles</span>
+                      <span className={a.vehicles_listed > 0 ? 'vehicles-count' : 'vehicles-none'}>
+                        {a.vehicles_listed > 0 ? a.vehicles_listed : 'None listed'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="auction-card-divider" />
+
+                  <div className="auction-card-footer">
+                    <a
+                      className="btn"
+                      href={`https://app.marketplace.autura.com/auction/${a.region_id}/auction-${a.auction_id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      Listing
+                    </a>
+                    <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${a.auction_id}`); }}>
+                      View
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 };

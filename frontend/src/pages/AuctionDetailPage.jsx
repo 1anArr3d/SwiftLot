@@ -8,6 +8,7 @@ import ImageCycler from '../components/ImageCycler';
 const AuctionDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [auction, setAuction] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [watchlistVins, setWatchlistVins] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,6 +20,10 @@ const AuctionDetailPage = () => {
   });
 
   useEffect(() => {
+    fetch(`${API}/auctions/${id}`)
+      .then(r => r.json())
+      .then(setAuction)
+      .catch(console.error);
     fetch(`${API}/auctions/${id}/vehicles`)
       .then(r => r.json())
       .then(setVehicles)
@@ -70,7 +75,7 @@ const AuctionDetailPage = () => {
     return true;
   });
 
-  const COLS = 12;
+  const COLS = 13;
 
   return (
     <div className="app-wrapper">
@@ -106,13 +111,26 @@ const AuctionDetailPage = () => {
       </aside>
 
       <div className="main-content">
-        <div className="page-header">
-          <div className="page-header-left">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <button className="btn-back" onClick={() => navigate('/auctions')}>← Back</button>
-              <h1 className="page-title">{id}</h1>
+        <div className="auction-detail-header">
+          <div className="auction-detail-header-left">
+            <button className="btn" onClick={() => navigate(-1)}>Back</button>
+            <div className="auction-detail-title">
+              <span className="auction-detail-name">{auction?.title || auction?.seller_name || id}</span>
+              {auction?.region_id && <span className="auction-detail-meta">{auction.region_id}</span>}
             </div>
-            <span className="page-subtitle">{filteredVehicles.length} / {vehicles.length} units</span>
+          </div>
+          <div className="auction-detail-header-right">
+            <span className="vehicle-count-badge">{filteredVehicles.length} / {vehicles.length} vehicles</span>
+            {auction && (
+              <a
+                className="btn"
+                href={`https://app.marketplace.autura.com/auction/${auction.region_id}/auction-${id}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Listing
+              </a>
+            )}
           </div>
         </div>
         <div className="controls">
@@ -127,7 +145,7 @@ const AuctionDetailPage = () => {
           <table className="vehicle-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Trans', 'VIN', 'Odometer', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Trans', 'Fuel', 'VIN', 'Odometer', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
@@ -152,11 +170,15 @@ const AuctionDetailPage = () => {
                     <td>{car.start_status}</td>
                     <td>{car.engine_type}</td>
                     <td>{car.transmission}</td>
+                    <td>{car.fuel_type || '—'}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
                     <td>
-                      <button className={`btn-heart ${liked ? 'liked' : ''}`} onClick={e => toggleWatchlist(e, car.vin)}>
-                        {liked ? '♥' : '♡'}
+                      <button
+                        className={`btn${liked ? ' saved' : ''}`}
+                        onClick={e => toggleWatchlist(e, car.vin)}
+                      >
+                        {liked ? 'Saved' : 'Save'}
                       </button>
                     </td>
                   </tr>,
@@ -168,6 +190,19 @@ const AuctionDetailPage = () => {
                             <ImageCycler images={images} large />
                           </div>
                           <div className="expanded-details">
+                            <div className="expanded-actions">
+                              <a
+                                className="btn"
+                                href={car.vehicle_id
+                                  ? `https://app.marketplace.autura.com/auction/${car.city}/auction-${car.auction_id}/vehicle/${car.vehicle_id}`
+                                  : `https://app.marketplace.autura.com/auction/${car.city}/auction-${car.auction_id}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={e => e.stopPropagation()}
+                              >
+                                View Listing
+                              </a>
+                            </div>
                             <div className="detail-grid">
                               <div className="detail-item"><span className="detail-label">Year</span><span>{car.year}</span></div>
                               <div className="detail-item"><span className="detail-label">Make</span><span>{car.make}</span></div>
