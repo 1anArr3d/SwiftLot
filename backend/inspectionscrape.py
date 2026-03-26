@@ -21,7 +21,32 @@ def _attempt_inspection(vin, p):
     try:
         # Entry via VehicleTestDetail establishes the correct session state
         page.goto("https://www.mytxcar.org/TXCar_Net/VehicleTestDetail.aspx", timeout=60000)
-        page.wait_for_function("document.querySelector('[name=\"cf-turnstile-response\"]').value.length > 0")
+
+        # Try auto-resolve first; if it stalls, the checkbox appeared — click it
+        try:
+            page.wait_for_function(
+                "document.querySelector('[name=\"cf-turnstile-response\"]').value.length > 0",
+                timeout=8000
+            )
+        except Exception:
+            try:
+                rect = page.evaluate("""
+                    () => {
+                        const el = document.querySelector('.cf-turnstile');
+                        if (!el) return null;
+                        const r = el.getBoundingClientRect();
+                        return { x: r.left, y: r.top };
+                    }
+                """)
+                if rect:
+                    page.mouse.click(rect['x'] + 25, rect['y'] + 32)
+            except Exception:
+                pass
+            page.wait_for_function(
+                "document.querySelector('[name=\"cf-turnstile-response\"]').value.length > 0",
+                timeout=30000
+            )
+
         page.locator('input[type="submit"]').click()
 
         page.wait_for_selector("#txtVin", timeout=15000)
