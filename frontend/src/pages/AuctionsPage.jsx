@@ -26,14 +26,14 @@ const AuctionsPage = () => {
       .catch(console.error);
   }, []);
 
-  // Group by region
-  const regions = [...new Set(auctions.map(a => a.region_id))].sort();
+  const active = auctions.filter(a => a.auction_status !== 'completed');
+  const regions = [...new Set(active.map(a => a.region_id))].sort();
   const byRegion = regions.reduce((acc, r) => {
-    acc[r] = auctions.filter(a => a.region_id === r);
+    acc[r] = active.filter(a => a.region_id === r);
     return acc;
   }, {});
 
-  if (auctions.length === 0) {
+  if (active.length === 0) {
     return (
       <div className="page-content">
         <div className="empty-msg">No auctions found. Run discovery to populate.</div>
@@ -45,6 +45,7 @@ const AuctionsPage = () => {
     <div className="page-content">
       {regions.map(regionId => {
         const regionAuctions = byRegion[regionId];
+        if (!regionAuctions.length) return null;
         const label = REGION_LABEL[regionId] || regionId;
 
         return (
