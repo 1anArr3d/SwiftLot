@@ -8,20 +8,6 @@ from config import DB_PATH
 BASE_URL = "https://app.marketplace.autura.com"
 PARALLEL_PAGES = 5  # number of vehicle pages to scrape simultaneously
 
-def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS vehicles (
-            vin TEXT PRIMARY KEY, year TEXT, make TEXT, model TEXT, color TEXT,
-            key_status TEXT, catalytic_converter TEXT, start_status TEXT,
-            engine_type TEXT, transmission TEXT, auction_id TEXT, city TEXT,
-            last_recorded_odo TEXT, images TEXT, vehicle_id TEXT, fuel_type TEXT)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS odometer_history (
-            row_id TEXT PRIMARY KEY, vin TEXT, inspection_date TEXT, mileage INTEGER)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS watchlist (
-            vin TEXT PRIMARY KEY, year TEXT, make TEXT, model TEXT, color TEXT,
-            key_status TEXT, catalytic_converter TEXT, start_status TEXT,
-            engine_type TEXT, transmission TEXT, auction_id TEXT, city TEXT,
-            last_recorded_odo TEXT, images TEXT, liked_at TEXT)''')
 
 def _format_odo(raw_odo):
     if not raw_odo:

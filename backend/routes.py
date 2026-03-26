@@ -5,7 +5,7 @@ from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, JobStatus
 from config import DB_PATH
 from state import scrape_status, discovery_status, inspection_status
 import scraper
-import inspectionscrape
+import inspection
 import discovery
 import sqlite3
 import threading
@@ -95,7 +95,7 @@ def remove_from_watchlist(vin: str):
 
 def _run_inspections(vins: list[str]):
     with ThreadPoolExecutor(max_workers=INSPECTION_WORKERS) as pool:
-        pool.map(inspectionscrape.run_inspection_scrape, vins)
+        pool.map(inspection.run_inspection_scrape, vins)
 
 
 def _run_scrape(auction_id: str, city: str):
@@ -125,7 +125,7 @@ def _run_scrape(auction_id: str, city: str):
 def _run_inspection(vin: str):
     try:
         inspection_status[vin] = "running"
-        inspectionscrape.run_inspection_scrape(vin)
+        inspection.run_inspection_scrape(vin)
         inspection_status[vin] = "done"
     except Exception as e:
         print(f"[inspection] ERROR for {vin}: {e}")

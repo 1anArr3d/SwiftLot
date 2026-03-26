@@ -7,19 +7,6 @@ from config import DB_PATH
 BASE_URL = "https://app.marketplace.autura.com"
 
 
-def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
-            auction_id   TEXT PRIMARY KEY,
-            region_id    TEXT,
-            seller_name  TEXT,
-            auction_status TEXT,
-            vehicles_listed INTEGER,
-            last_discovered TEXT,
-            last_scraped_count INTEGER
-        )''')
-
-
 
 def upsert_auction(conn, auction):
     conn.execute('''
@@ -96,8 +83,6 @@ async def _scroll_to_end(page):
 
 
 async def _run_discovery(state: str = "TX", region_id: str = None):
-    init_db()
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
@@ -160,5 +145,3 @@ def run_discovery(state: str = "TX", region_id: str = None):
     asyncio.run(_run_discovery(state, region_id))
 
 
-if __name__ == "__main__":
-    run_discovery()

@@ -2,17 +2,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from config import ALLOWED_ORIGINS
+from db import init_db
 from scheduler import create_scheduler
-import scraper
-import discovery
 
 from routes import router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scraper.init_db()
-    discovery.init_db()
+    init_db()
 
     scheduler = create_scheduler()
     scheduler.start()
