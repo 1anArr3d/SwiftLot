@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from concurrent.futures import ThreadPoolExecutor
 from db import query, get_db
 from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, JobStatus
 from config import DB_PATH
@@ -7,6 +8,9 @@ import scraper
 import inspectionscrape
 import discovery
 import sqlite3
+import threading
+
+INSPECTION_WORKERS = 2
 
 router = APIRouter(prefix="/api/v1")
 
@@ -25,6 +29,14 @@ def get_auction(auction_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Auction not found")
     return dict(row)
+
+
+@router.delete("/auctions", tags=["auctions"])
+def delete_auctions():
+    with get_db() as conn:
+        conn.execute("DELETE FROM vehicles")
+        conn.execute("DELETE FROM auctions")
+    return {"status": "cleared"}
 
 
 @router.get("/auctions/{auction_id}/vehicles", response_model=list[Vehicle], tags=["auctions"])
@@ -81,6 +93,11 @@ def remove_from_watchlist(vin: str):
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
+def _run_inspections(vins: list[str]):
+    with ThreadPoolExecutor(max_workers=INSPECTION_WORKERS) as pool:
+        pool.map(inspectionscrape.run_inspection_scrape, vins)
+
+
 def _run_scrape(auction_id: str, city: str):
     try:
         scrape_status[auction_id] = "running"
@@ -90,15 +107,16 @@ def _run_scrape(auction_id: str, city: str):
                 "UPDATE auctions SET last_scraped_count = vehicles_listed WHERE auction_id = ?",
                 (auction_id,)
             )
+        scrape_status[auction_id] = "done"
         if city and city.endswith('-TX'):
             rows = query(
                 "SELECT vin FROM vehicles WHERE auction_id = ? AND last_recorded_odo IS NULL",
                 (auction_id,)
             )
-            for row in rows:
-                print(f"[scrape] Running inspection for {row['vin']}")
-                inspectionscrape.run_inspection_scrape(row["vin"])
-        scrape_status[auction_id] = "done"
+            vins = [row["vin"] for row in rows]
+            if vins:
+                print(f"[scrape] Firing inspection for {len(vins)} VINs")
+                threading.Thread(target=_run_inspections, args=(vins,), daemon=True).start()
     except Exception as e:
         print(f"[scrape] ERROR for {auction_id}: {e}")
         scrape_status[auction_id] = "failed"
