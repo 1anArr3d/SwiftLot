@@ -3,7 +3,7 @@ from apscheduler.triggers.cron import CronTrigger
 from db import query, get_db
 from state import scrape_status
 from routes import _run_scrape
-import discovery
+import auction_discovery as discovery
 
 
 def scheduled_discovery_and_scrape():

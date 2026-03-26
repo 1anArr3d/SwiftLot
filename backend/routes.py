@@ -4,8 +4,8 @@ from db import query, get_db
 from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, JobStatus
 from config import DB_PATH
 from state import scrape_status, discovery_status, inspection_status
-import scraper
-import inspection
+import auction_scraper as scraper
+import inspection_scraper as inspection
 import discovery
 import sqlite3
 import threading

@@ -26,10 +26,10 @@ backend/
   db.py             # SQLite connection and query helpers
   models.py         # Pydantic response models
   state.py             # Shared in-memory job status tracking
-  scheduler.py         # APScheduler — 3x daily pipeline
-  scraper.py           # Async Playwright auction scraper
-  inspectionscrape.py  # Sync Playwright TX inspection scraper
-  discovery.py         # Discovers auctions by state
+  scheduler.py            # APScheduler — 3x daily pipeline
+  auction_scraper.py      # Async Playwright — scrapes vehicles per auction
+  auction_discovery.py    # Async Playwright — discovers active auctions by state
+  inspection_scraper.py   # Sync Playwright — TX state odometer history per VIN
   routes.py            # All API route handlers
 
 frontend/
