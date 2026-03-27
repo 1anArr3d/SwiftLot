@@ -11,7 +11,7 @@ const WatchlistPage = () => {
   const [yearRange, setYearRange] = useState([null, null]);
   const [filters, setFilters] = useState({
     make: new Set(), model: new Set(), start_status: new Set(),
-    engine_type: new Set(), transmission: new Set(),
+    engine_type: new Set(), drivetrain: new Set(),
   });
 
   useEffect(() => {
@@ -36,7 +36,7 @@ const WatchlistPage = () => {
   const setFilter = (key, val) => setFilters(prev => ({ ...prev, [key]: val }));
   const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null;
   const clearAll = () => {
-    setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), transmission: new Set() });
+    setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
     setYearRange([null, null]);
   };
 
@@ -83,8 +83,8 @@ const WatchlistPage = () => {
         <FilterSection title="Engine">
           <ChecklistFilter options={uniqueOpts('engine_type')} selected={filters.engine_type} onChange={v => setFilter('engine_type', v)} />
         </FilterSection>
-        <FilterSection title="Transmission">
-          <ChecklistFilter options={uniqueOpts('transmission')} selected={filters.transmission} onChange={v => setFilter('transmission', v)} />
+        <FilterSection title="Drivetrain">
+          <ChecklistFilter options={uniqueOpts('drivetrain')} selected={filters.drivetrain} onChange={v => setFilter('drivetrain', v)} />
         </FilterSection>
       </aside>
 
@@ -105,7 +105,7 @@ const WatchlistPage = () => {
           <table className="vehicle-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Trans', 'Fuel', 'VIN', 'Odometer', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'VIN', 'Odometer', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
@@ -128,7 +128,7 @@ const WatchlistPage = () => {
                     <td className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</td>
                     <td>{car.start_status}</td>
                     <td>{car.engine_type}</td>
-                    <td>{car.transmission}</td>
+                    <td>{car.drivetrain}</td>
                     <td>{car.fuel_type || '—'}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
@@ -153,7 +153,7 @@ const WatchlistPage = () => {
                               <div className="detail-item"><span className="detail-label">Cat. Converter</span><span className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</span></div>
                               <div className="detail-item"><span className="detail-label">Start Status</span><span>{car.start_status}</span></div>
                               <div className="detail-item"><span className="detail-label">Engine</span><span>{car.engine_type}</span></div>
-                              <div className="detail-item"><span className="detail-label">Transmission</span><span>{car.transmission}</span></div>
+                              <div className="detail-item"><span className="detail-label">Drivetrain</span><span>{car.drivetrain}</span></div>
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
                                 <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}</span></div>

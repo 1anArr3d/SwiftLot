@@ -9,10 +9,25 @@ const STATUS_LABEL = {
 };
 
 const REGION_LABEL = {
-  'SA-TX': 'San Antonio, TX',
+  'SA-TX':  'San Antonio, TX',
   'AUS-TX': 'Austin, TX',
-  'DL-TX': 'Dallas – Fort Worth, TX',
-  'EP-TX': 'El Paso, TX',
+  'DL-TX':  'Dallas – Fort Worth, TX',
+  'EP-TX':  'El Paso, TX',
+  'CHI-IL': 'Chicago, IL',
+  'DET-MI': 'Detroit, MI',
+  'IN-IN':  'Indianapolis, IN',
+  'KC-MO':  'Kansas City, MO',
+  'LAX-CA': 'Los Angeles, CA',
+  'LV-NV':  'Las Vegas, NV',
+  'LX-KY':  'Lexington, KY',
+  'NSH-TN': 'Nashville, TN',
+  'OC-CA':  'Orange County, CA',
+  'PHX-AZ': 'Phoenix, AZ',
+  'RDU-NC': 'Raleigh, NC',
+  'SBC-CA': 'San Bernardino, CA',
+  'SF-CA':  'San Francisco, CA',
+  'SJ-CA':  'San Jose, CA',
+  'VC-CA':  'Ventura County, CA',
 };
 
 const AuctionsPage = () => {
@@ -90,7 +105,7 @@ const AuctionsPage = () => {
                   <div className="auction-card-footer">
                     <a
                       className="btn"
-                      href={`https://app.marketplace.autura.com/auction/${a.region_id}/auction-${a.auction_id}`}
+                      href={`https://app.marketplace.autura.com/auction/${a.region_id}/${a.auction_id}`}
                       target="_blank"
                       rel="noreferrer"
                       onClick={e => e.stopPropagation()}

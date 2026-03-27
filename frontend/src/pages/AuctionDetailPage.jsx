@@ -16,7 +16,7 @@ const AuctionDetailPage = () => {
   const [yearRange, setYearRange] = useState([null, null]);
   const [filters, setFilters] = useState({
     make: new Set(), model: new Set(), start_status: new Set(),
-    engine_type: new Set(), transmission: new Set(),
+    engine_type: new Set(), drivetrain: new Set(),
   });
 
   useEffect(() => {
@@ -58,7 +58,7 @@ const AuctionDetailPage = () => {
   const setFilter = (key, val) => setFilters(prev => ({ ...prev, [key]: val }));
   const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null;
   const clearAll = () => {
-    setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), transmission: new Set() });
+    setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
     setYearRange([null, null]);
   };
 
@@ -75,7 +75,8 @@ const AuctionDetailPage = () => {
     return true;
   });
 
-  const COLS = 13;
+  const COLS = 15;
+  const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
 
   return (
     <div className="app-wrapper">
@@ -105,8 +106,8 @@ const AuctionDetailPage = () => {
         <FilterSection title="Engine">
           <ChecklistFilter options={uniqueOpts('engine_type')} selected={filters.engine_type} onChange={v => setFilter('engine_type', v)} />
         </FilterSection>
-        <FilterSection title="Transmission">
-          <ChecklistFilter options={uniqueOpts('transmission')} selected={filters.transmission} onChange={v => setFilter('transmission', v)} />
+        <FilterSection title="Drivetrain">
+          <ChecklistFilter options={uniqueOpts('drivetrain')} selected={filters.drivetrain} onChange={v => setFilter('drivetrain', v)} />
         </FilterSection>
       </aside>
 
@@ -145,7 +146,7 @@ const AuctionDetailPage = () => {
           <table className="vehicle-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Trans', 'Fuel', 'VIN', 'Odometer', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
@@ -169,8 +170,10 @@ const AuctionDetailPage = () => {
                     <td className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</td>
                     <td>{car.start_status}</td>
                     <td>{car.engine_type}</td>
-                    <td>{car.transmission}</td>
+                    <td>{car.drivetrain}</td>
                     <td>{car.fuel_type || '—'}</td>
+                    <td className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</td>
+                    <td>{fmt$(car.reserve_price)}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
                     <td>
@@ -193,9 +196,9 @@ const AuctionDetailPage = () => {
                             <div className="expanded-actions">
                               <a
                                 className="btn"
-                                href={car.vehicle_id
-                                  ? `https://app.marketplace.autura.com/auction/${car.city}/auction-${car.auction_id}/vehicle/${car.vehicle_id}`
-                                  : `https://app.marketplace.autura.com/auction/${car.city}/auction-${car.auction_id}`}
+                                href={car.item_id
+                                  ? `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}/vehicle/${car.item_id}`
+                                  : `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}`}
                                 target="_blank"
                                 rel="noreferrer"
                                 onClick={e => e.stopPropagation()}
@@ -212,7 +215,15 @@ const AuctionDetailPage = () => {
                               <div className="detail-item"><span className="detail-label">Cat. Converter</span><span className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</span></div>
                               <div className="detail-item"><span className="detail-label">Start Status</span><span>{car.start_status}</span></div>
                               <div className="detail-item"><span className="detail-label">Engine</span><span>{car.engine_type}</span></div>
-                              <div className="detail-item"><span className="detail-label">Transmission</span><span>{car.transmission}</span></div>
+                              <div className="detail-item"><span className="detail-label">Drivetrain</span><span>{car.drivetrain}</span></div>
+                              <div className="detail-item"><span className="detail-label">Body</span><span>{car.body_type || '—'}</span></div>
+                              <div className="detail-item"><span className="detail-label">Cylinders</span><span>{car.num_cylinders || '—'}</span></div>
+                              <div className="detail-item"><span className="detail-label">Doc Type</span><span>{car.documentation_type || '—'}</span></div>
+                              <div className="detail-item"><span className="detail-label">Current Bid</span><span className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</span></div>
+                              <div className="detail-item"><span className="detail-label">Reserve</span><span>{fmt$(car.reserve_price)}</span></div>
+                              <div className="detail-item"><span className="detail-label">Buyer Fee</span><span>{fmt$(car.fee_price)}</span></div>
+                              {car.bid_expiration && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(car.bid_expiration).toLocaleString()}</span></div>}
+                              {car.seller_notes && <div className="detail-item detail-item-full"><span className="detail-label">Seller Notes</span><span>{car.seller_notes}</span></div>}
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
                                 <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}</span></div>
