@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from concurrent.futures import ThreadPoolExecutor
 from db import query, get_db
 from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, JobStatus
 from config import DB_PATH
@@ -9,8 +8,6 @@ import inspection_scraper as inspection
 import auction_discovery as discovery
 import sqlite3
 import threading
-
-INSPECTION_WORKERS = 2
 
 router = APIRouter(prefix="/api/v1")
 
@@ -110,11 +107,6 @@ def remove_from_watchlist(vin: str):
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
-def _run_inspections(vins: list[str]):
-    with ThreadPoolExecutor(max_workers=INSPECTION_WORKERS) as pool:
-        pool.map(inspection.run_inspection_scrape, vins)
-
-
 def _run_scrape(auction_id: str, region_id: str):
     try:
         scrape_status[auction_id] = "running"
@@ -133,7 +125,7 @@ def _run_scrape(auction_id: str, region_id: str):
             vins = [row["vin"] for row in rows]
             if vins:
                 print(f"[scrape] Firing inspection for {len(vins)} VINs")
-                threading.Thread(target=_run_inspections, args=(vins,), daemon=True).start()
+                threading.Thread(target=inspection.run_inspection_batch, args=(vins,), daemon=True).start()
     except Exception as e:
         print(f"[scrape] ERROR for {auction_id}: {e}")
         scrape_status[auction_id] = "failed"
@@ -142,7 +134,7 @@ def _run_scrape(auction_id: str, region_id: str):
 def _run_inspection(vin: str):
     try:
         inspection_status[vin] = "running"
-        inspection.run_inspection_scrape(vin)
+        inspection.run_inspection_batch([vin])
         inspection_status[vin] = "done"
     except Exception as e:
         print(f"[inspection] ERROR for {vin}: {e}")
