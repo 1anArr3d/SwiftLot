@@ -1,115 +1,209 @@
-import asyncio
+"""
+API-based auction scraper — replaces Playwright scraping entirely.
+Fetches vehicle inventory from the Autura items-http microservice.
+"""
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
-from playwright.async_api import async_playwright
-from config import DB_PATH
 
-BASE_URL = "https://app.marketplace.autura.com"
-PARALLEL_PAGES = 5  # number of vehicle pages to scrape simultaneously
+import autura_api
+from config import DB_PATH
 
 
 def _format_odo(raw_odo):
     if not raw_odo:
         return None
-    numeric = ''.join(c for c in raw_odo.split('(')[0] if c.isdigit() or c == ',').replace(',', '').strip()
+    numeric = ''.join(c for c in str(raw_odo).split('(')[0] if c.isdigit() or c == ',').replace(',', '').strip()
     if not numeric:
         return None
     return f"{date.today().strftime('%m/%d/%Y')}: {int(numeric):,}"
 
-def save_vehicle(conn, vehicle, auction_id, city, images_json):
-    raw_odo = vehicle.get("Odometer") or vehicle.get("Odometer Reading") or vehicle.get("Miles")
+
+def _parse_images(image_dict: dict) -> tuple[str, int]:
+    """
+    Extract full_4x3 URLs from the nested image structure.
+    Structure: image["full_4x3"] = {"0": {"url": ...}, "1": {"url": ...}, ...}
+    """
+    if not image_dict:
+        return None, 0
+    size = image_dict.get("full_4x3") or image_dict.get("thumbnail_4x3") or {}
+    urls = []
+    for idx in sorted(size.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+        entry = size[idx]
+        if isinstance(entry, dict) and entry.get("url"):
+            urls.append(entry["url"])
+    return (json.dumps(urls) if urls else None), len(urls)
+
+
+def _extract_fee(fees) -> float | None:
+    """Extract buyer fee from the fees dict/value in currentResult."""
+    if fees is None:
+        return None
+    if isinstance(fees, (int, float)):
+        return float(fees)
+    if isinstance(fees, dict):
+        # feePrice shape: {"amount": N, ...}
+        # fees shape from currentResult: {"buyerFee": N, "total": N, ...}
+        for key in ("amount", "buyerFee", "buyer_fee", "fee", "total"):
+            if key in fees and isinstance(fees[key], (int, float)):
+                return float(fees[key])
+        total = sum(v for v in fees.values() if isinstance(v, (int, float)))
+        return float(total) if total else None
+    return None
+
+
+def _str_val(v) -> str | None:
+    """Extract a string from a plain string or a {code, name} dict."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v or None
+    if isinstance(v, dict):
+        return v.get("name") or v.get("code") or None
+    return str(v)
+
+
+def _firestore_ts_to_iso(ts) -> str | None:
+    """Convert Firestore {_seconds, _nanoseconds} dict or plain ISO string to ISO string."""
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        return ts
+    if isinstance(ts, dict) and "_seconds" in ts:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(ts["_seconds"], tz=timezone.utc).isoformat()
+    return None
+
+
+def save_vehicle(conn, item: dict, auction_id: str, region_id: str):
+    info = item.get("info") or {}
+    result = item.get("currentResult") or {}
+
+    override = item.get("_images_override")
+    if override:
+        images_json = json.dumps(override)
+        images_count = len(override)
+    else:
+        images_json, images_count = _parse_images(item.get("image"))
+        if item.get("imagesCount") is not None:
+            images_count = int(item["imagesCount"])
+
+    raw_odo = info.get("odometer") or info.get("mileage")
     listing_odo = _format_odo(raw_odo)
-    data = (
-        vehicle.get("VIN"), vehicle.get("Year"), vehicle.get("Make"),
-        vehicle.get("Model"), vehicle.get("Color"), vehicle.get("Key status"),
-        vehicle.get("Catalytic Converter"), vehicle.get("Start status"),
-        vehicle.get("Engine type"), vehicle.get("Transmission"),
-        str(auction_id), city, listing_odo, images_json,
-        vehicle.get("Vehicle Id"), vehicle.get("Fuel Type"),
-    )
-    conn.execute('''
-        INSERT INTO vehicles (vin, year, make, model, color, key_status,
-        catalytic_converter, start_status, engine_type, transmission, auction_id, city,
-        last_recorded_odo, images, vehicle_id, fuel_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(vin) DO UPDATE SET
-            auction_id=excluded.auction_id,
-            images=excluded.images,
-            vehicle_id=excluded.vehicle_id,
-            fuel_type=excluded.fuel_type
-    ''', data)
 
-async def scrape_vehicle(browser, href, auctionid, city, conn, lock):
-    page = await browser.new_page()
     try:
-        await page.goto(f"{BASE_URL}{href}", wait_until="load")
-        table = await page.wait_for_selector("div.ant-table-content", timeout=10000)
-        rows = await table.query_selector_all("tr")
-        vehicle_data = {}
-        for r in rows:
-            cells = await r.query_selector_all("td")
-            if len(cells) >= 2:
-                key = (await cells[0].inner_text()).strip()
-                val = (await cells[1].inner_text()).strip()
-                vehicle_data[key] = val
+        year = int(info.get("year")) if info.get("year") else None
+    except (ValueError, TypeError):
+        year = None
 
-        # extract image URLs from gallery-thumb background-image styles
-        image_urls = await page.evaluate("""
-            () => Array.from(document.querySelectorAll('div.gallery-thumb'))
-                .map(el => {
-                    const style = el.getAttribute('style') || '';
-                    const match = style.match(/url\\(["']?(.*?)["']?\\)/);
-                    return match ? match[1].replace('thumbnail_4x3', 'full_4x3') : null;
-                })
-                .filter(Boolean)
-        """)
-        images_json = json.dumps(image_urls)
+    conn.execute('''
+        INSERT INTO vehicles (
+            vin, year, make, model, body_type, color, key_status,
+            catalytic_converter, start_status, engine_type, drivetrain,
+            fuel_type, num_cylinders, documentation_type,
+            auction_id, region_id, seller_id, item_id, item_key,
+            current_bid, bid_expiration, reserve_price, fee_price,
+            seller_notes, images, images_count, published_at, last_recorded_odo
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(vin) DO UPDATE SET
+            year               = excluded.year,
+            make               = excluded.make,
+            model              = excluded.model,
+            body_type          = excluded.body_type,
+            color              = excluded.color,
+            key_status         = excluded.key_status,
+            catalytic_converter = excluded.catalytic_converter,
+            start_status       = excluded.start_status,
+            engine_type        = excluded.engine_type,
+            drivetrain         = excluded.drivetrain,
+            fuel_type          = excluded.fuel_type,
+            num_cylinders      = excluded.num_cylinders,
+            documentation_type = excluded.documentation_type,
+            auction_id         = excluded.auction_id,
+            region_id          = excluded.region_id,
+            seller_id          = excluded.seller_id,
+            item_id            = excluded.item_id,
+            item_key           = excluded.item_key,
+            current_bid        = excluded.current_bid,
+            bid_expiration     = excluded.bid_expiration,
+            reserve_price      = excluded.reserve_price,
+            fee_price          = excluded.fee_price,
+            seller_notes       = excluded.seller_notes,
+            images             = excluded.images,
+            images_count       = excluded.images_count,
+            published_at       = excluded.published_at
+    ''', (
+        info.get("vin"),
+        year,
+        _str_val(info.get("make")),
+        _str_val(info.get("model")),
+        _str_val(info.get("body") or info.get("bodyType")),
+        _str_val(info.get("exteriorColor") or info.get("color")),
+        _str_val(info.get("keyStatus")),
+        _str_val(info.get("catalyticConverter")),
+        _str_val(info.get("startCode") or info.get("startStatus")),
+        _str_val(info.get("engineType")),
+        _str_val(info.get("drivetrain")),
+        _str_val(info.get("fuelType")),
+        str(info.get("numCylinders")) if info.get("numCylinders") is not None else None,
+        _str_val(info.get("documentationType")),
+        auction_id,
+        region_id,
+        item.get("sellerId"),
+        item.get("itemId"),
+        item.get("key"),
+        float(result["amount"]) if result.get("amount") is not None else None,
+        result.get("expiration"),
+        float(item["reservePrice"]) if item.get("reservePrice") is not None else (
+            float(result["reservePrice"]) if result.get("reservePrice") is not None else None
+        ),
+        _extract_fee(result.get("fees")) or _extract_fee(item.get("feePrice")),
+        item.get("sellerNotes") or result.get("sellerNotes") or info.get("sellerNotes"),
+        images_json,
+        images_count,
+        _firestore_ts_to_iso(item.get("publishedAt")),
+        listing_odo,
+    ))
 
-        if "VIN" in vehicle_data:
-            async with lock:
-                save_vehicle(conn, vehicle_data, auctionid, city, images_json)
-                conn.commit()
-    except Exception as e:
-        print(f"Error scraping {href}: {e}")
-    finally:
-        await page.close()
 
-async def _scrape(auctionid, city):
+def scrape_data(auction_id: str, region_id: str) -> int:
+    """Fetch all vehicles for an auction via API and save to DB. Returns vehicle count."""
+    full_id = auction_id if auction_id.startswith("auction-") else f"auction-{auction_id}"
+    print(f"[scraper] Fetching inventory for {full_id} ({region_id})...")
+    items = autura_api.get_inventory(region_id, full_id)
+    valid = [item for item in items if (item.get("info") or {}).get("vin")]
+    print(f"[scraper] Got {len(valid)} items with VINs")
+
+    if not valid:
+        return 0
+
+    # Fetch full image lists in parallel (one Firestore call per item)
+    image_map: dict[str, list[str]] = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(autura_api.get_item_images, item["key"]): item["key"]
+                   for item in valid if item.get("key")}
+        for future in as_completed(futures):
+            key = futures[future]
+            image_map[key] = future.result()
+
+    saved = 0
     with sqlite3.connect(DB_PATH) as conn:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            try:
-                await page.goto(f"{BASE_URL}/auction/{city}/auction-{auctionid}", wait_until="load")
-                await page.wait_for_selector('a[href*="/vehicle/"]', timeout=10000)
+        for item in valid:
+            # Inject fetched images into item before saving
+            item_key = item.get("key")
+            if item_key and image_map.get(item_key):
+                item["_images_override"] = image_map[item_key]
+            save_vehicle(conn, item, full_id, region_id)
+            saved += 1
+        conn.commit()
 
-                # scroll until no new links appear
-                prev_count = 0
-                while True:
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await page.wait_for_timeout(1500)
-                    links = [await l.get_attribute("href") for l in await page.query_selector_all('a[href*="/vehicle/"]')]
-                    if len(links) == prev_count:
-                        break
-                    prev_count = len(links)
-
-                await page.close()
-                print(f"Found {len(set(links))} vehicles")
-
-                # scrape all vehicle pages in parallel batches
-                lock = asyncio.Lock()
-                sem = asyncio.Semaphore(PARALLEL_PAGES)
-
-                async def bounded(href):
-                    async with sem:
-                        await scrape_vehicle(browser, href, auctionid, city, conn, lock)
-
-                await asyncio.gather(*[bounded(href) for href in set(links)])
-            except Exception as e:
-                print(f"Error: {e}")
-            finally:
-                await browser.close()
-
-def scrape_data(auctionid, city="SA-TX"):
-    asyncio.run(_scrape(auctionid, city))
+    print(f"[scraper] Saved {saved} vehicles for {full_id}")
+    return saved

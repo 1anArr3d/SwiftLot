@@ -1,35 +1,55 @@
-import asyncio
+"""
+Auction discovery — pure API, no Playwright, nationwide coverage.
+
+Pulls active region IDs from the search service, then fetches all auction
+series per region via auctions-http. No hardcoded states or region IDs.
+"""
 import sqlite3
 from datetime import datetime, timezone
-from playwright.async_api import async_playwright
+
+import autura_api
 from config import DB_PATH
 
-BASE_URL = "https://app.marketplace.autura.com"
+
+def _epoch_ms_to_iso(epoch_ms) -> str | None:
+    if not epoch_ms:
+        return None
+    try:
+        return datetime.fromtimestamp(int(epoch_ms) / 1000, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
 
 
-
-def upsert_auction(conn, auction):
+def upsert_auction(conn, record: dict):
     conn.execute('''
-        INSERT INTO auctions
-            (auction_id, region_id, seller_name, auction_status, vehicles_listed, last_discovered)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO auctions (
+            auction_id, region_id, seller_name, auction_status,
+            vehicles_listed, last_discovered, series_key, minimum_bid, sales_tax, ended_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(auction_id) DO UPDATE SET
             seller_name     = excluded.seller_name,
             auction_status  = excluded.auction_status,
-            vehicles_listed = excluded.vehicles_listed,
-            last_discovered = excluded.last_discovered
+            last_discovered = excluded.last_discovered,
+            series_key      = excluded.series_key,
+            minimum_bid     = excluded.minimum_bid,
+            sales_tax       = excluded.sales_tax,
+            ended_at        = excluded.ended_at
     ''', (
-        auction['auction_id'],
-        auction['region_id'],
-        auction['seller_name'],
-        auction['auction_status'],
-        auction['vehicles_listed'],
+        record["auction_id"],
+        record["region_id"],
+        record["seller_name"],
+        record["auction_status"],
+        record.get("vehicles_listed"),
         datetime.now(timezone.utc).isoformat(),
+        record.get("series_key"),
+        record.get("minimum_bid"),
+        record.get("sales_tax"),
+        record.get("ended_at"),
     ))
 
 
 def mark_completed_auctions(conn, seen_ids: set):
-    """Any auction not seen in the latest discovery run gets marked completed."""
+    """Any active auction not seen in this run gets marked completed."""
     placeholders = ','.join('?' * len(seen_ids))
     conn.execute(
         f"UPDATE auctions SET auction_status='completed' WHERE auction_id NOT IN ({placeholders})",
@@ -37,111 +57,58 @@ def mark_completed_auctions(conn, seen_ids: set):
     )
 
 
-STATE_CARD_JS = """
-    () => Array.from(document.querySelectorAll('[data-testid="auction-card-item"]'))
-        .map(el => ({
-            auction_id: el.getAttribute('data-auctionid').replace('auction-', ''),
-            region_id:  el.getAttribute('data-regionid'),
-        }))
-"""
+def _discover_region(region_id: str) -> list[dict]:
+    series_list = autura_api.get_auction_series(region_id)
+    auctions = []
+    for series in series_list:
+        seller_name  = series.get("name") or series.get("title") or ""
+        series_key   = series.get("key")
+        minimum_bid  = series.get("minimumBid")
+        sales_tax    = series.get("salesTax")
 
-CITY_CARD_JS = """
-    () => {
-        const results = [];
-        const sections = Array.from(document.querySelectorAll('.section-upcoming'));
-        document.querySelectorAll('[data-testid="auction-card-item"]').forEach(el => {
-            let seller = '';
-            for (let i = sections.length - 1; i >= 0; i--) {
-                if (sections[i].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
-                    const a = sections[i].querySelector('a[href*="/auctions/series/"]');
-                    if (a) { seller = a.innerText.trim(); }
-                    break;
-                }
-            }
-            results.push({
-                auction_id:      el.getAttribute('data-auctionid').replace('auction-', ''),
-                region_id:       el.getAttribute('data-regionid'),
-                auction_status:  el.getAttribute('data-auction-status'),
-                vehicles_listed: parseInt(el.getAttribute('data-vehicles-listed') || '0'),
-                seller_name:     seller,
-            });
-        });
-        return results;
-    }
-"""
+        for auction in series.get("auctions") or []:
+            auction_id = auction.get("auctionId") or auction.get("auction_id")
+            if not auction_id:
+                continue
+            ended = bool(auction.get("ended"))
+            auctions.append({
+                "auction_id":     auction_id,
+                "region_id":      region_id,
+                "seller_name":    seller_name,
+                "auction_status": "completed" if ended else "active",
+                "series_key":     series_key,
+                "minimum_bid":    float(minimum_bid) if minimum_bid is not None else None,
+                "sales_tax":      float(sales_tax) if sales_tax is not None else None,
+                "ended_at":       _epoch_ms_to_iso(auction.get("endedAt")),
+            })
+    return auctions
 
 
-async def _scroll_to_end(page):
-    prev = 0
-    while True:
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await page.wait_for_timeout(1000)
-        count = await page.locator('[data-testid="auction-card-item"]').count()
-        if count == prev:
-            break
-        prev = count
+def run_discovery():
+    print("[discovery] Fetching active regions...")
+    region_ids = autura_api.get_active_region_ids()
+    print(f"[discovery] {len(region_ids)} active regions: {region_ids}")
 
-
-async def _run_discovery(state: str = "TX", region_id: str = None):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-
+    all_auctions = []
+    for rid in region_ids:
         try:
-            # Phase 1: get region_ids from by-state page
-            print(f"[discovery] Fetching region IDs for {state}...")
-            await page.goto(f"{BASE_URL}/auctions/by-state/{state}", wait_until="load")
-            try:
-                await page.wait_for_selector('[data-testid="auction-card-item"]', timeout=15000)
-            except Exception:
-                print(f"[discovery] No cards on by-state/{state} page")
-                return
-            await _scroll_to_end(page)
-            state_cards = await page.evaluate(STATE_CARD_JS)
-            region_ids = sorted(set(c['region_id'] for c in state_cards if c['region_id']))
-            if region_id:
-                region_ids = [r for r in region_ids if r == region_id]
-            print(f"[discovery] Regions: {region_ids}")
-
-            # Phase 2: scrape each city page for full auction list
-            all_auctions = []
-            for rid in region_ids:
-                url = f"{BASE_URL}/auctions/{rid}"
-                await page.goto(url, wait_until="load")
-                try:
-                    await page.wait_for_selector('[data-testid="auction-card-item"]', timeout=15000)
-                except Exception:
-                    print(f"[discovery] [{rid}] No cards found")
-                    continue
-                await _scroll_to_end(page)
-                cards = await page.evaluate(CITY_CARD_JS)
-                print(f"[discovery] [{rid}] {len(cards)} cards")
-                all_auctions.extend(cards)
-
-            with_vehicles = [a for a in all_auctions if a['vehicles_listed'] > 0]
-            print(f"[discovery] {len(all_auctions)} total, {len(with_vehicles)} with vehicles")
-
-            all_seen_ids = set()
-            with sqlite3.connect(DB_PATH) as conn:
-                for a in with_vehicles:
-                    upsert_auction(conn, a)
-                    all_seen_ids.add(a['auction_id'])
-                conn.commit()
-                if all_seen_ids:
-                    mark_completed_auctions(conn, all_seen_ids)
-                    conn.commit()
-
-            print(f"[discovery] Saved {len(with_vehicles)} auctions.")
-
+            auctions = _discover_region(rid)
+            print(f"[discovery] [{rid}] {len(auctions)} auctions")
+            all_auctions.extend(auctions)
         except Exception as e:
-            print(f"[discovery] Error: {e}")
-        finally:
-            await browser.close()
+            print(f"[discovery] [{rid}] Error: {e}")
 
-    print("[discovery] Done.")
+    active = [a for a in all_auctions if a["auction_status"] != "completed"]
+    print(f"[discovery] {len(all_auctions)} total, {len(active)} active")
 
+    seen_ids = {a["auction_id"] for a in active}
+    with sqlite3.connect(DB_PATH) as conn:
+        # Only store active auctions — no point keeping completed ones
+        for a in active:
+            upsert_auction(conn, a)
+        conn.commit()
+        if seen_ids:
+            mark_completed_auctions(conn, seen_ids)
+        conn.commit()
 
-def run_discovery(state: str = "TX", region_id: str = None):
-    asyncio.run(_run_discovery(state, region_id))
-
-
+    print(f"[discovery] Saved {len(all_auctions)} auctions. Done.")
