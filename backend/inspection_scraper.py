@@ -1,28 +1,80 @@
+"""
+Inspection scraper — Playwright once to solve Turnstile, pure HTTP for all VINs.
+Session is acquired once per batch and reused across all lookups.
+"""
+import re
 import sqlite3
+from html.parser import HTMLParser
+
+from curl_cffi import requests as cffi_requests
 from playwright.sync_api import sync_playwright
+
+import threading
 from config import DB_PATH
 
+SEARCH_URL = "https://www.mytxcar.org/TXCar_Net/SearchVehicleTestHistory.aspx"
+HISTORY_URL = "https://www.mytxcar.org/TXCar_Net/VehicleTestHistory.aspx"
 
-def save_history(vin, results):
-    if not results:
-        return
-    with sqlite3.connect(DB_PATH) as conn:
-        for i, res in enumerate(results):
-            conn.execute('INSERT OR REPLACE INTO odometer_history VALUES (?, ?, ?, ?)',
-                         (f"{vin}_{i}", vin, res['date'], res['odometer']))
-        display = "\n".join([f"{r['date']}: {r['odometer']:,}" for r in results])
-        conn.execute("UPDATE vehicles SET last_recorded_odo = ? WHERE vin = ?", (display, vin))
+_http_session: cffi_requests.Session | None = None
+_session_lock = threading.Lock()
 
 
-def _attempt_inspection(vin, p):
-    sel = "a[onclick*='DoSelect']"
-    browser = p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
-    page = browser.new_page()
-    try:
-        # Entry via VehicleTestDetail establishes the correct session state
+# ── Parsers ───────────────────────────────────────────────────────────────────
+
+class _LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "a":
+            return
+        attrs = dict(attrs)
+        onclick = attrs.get("onclick", "")
+        aria = attrs.get("aria-label", "")
+        if "DoSelect" in onclick and aria:
+            m = re.search(r"DoSelect\('([^']*)',\s*'([^']*)',\s*'(\d+)'", onclick)
+            if m:
+                date = aria.split(" Click")[0].split(" ")[0]
+                self.links.append({
+                    "date": date,
+                    "search_type": m.group(1),
+                    "vin": m.group(2),
+                    "row_id": m.group(3),
+                })
+
+
+class _OdometerParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._next_is_value = False
+        self.odometer = None
+
+    def handle_data(self, data):
+        if "Odometer" in data:
+            self._next_is_value = True
+        elif self._next_is_value and data.strip().replace(",", "").isdigit():
+            self.odometer = int(data.strip().replace(",", ""))
+            self._next_is_value = False
+
+
+def _extract_hidden(html: str) -> dict:
+    fields = {}
+    for m in re.finditer(r'<input[^>]+name="(__[^"]+)"[^>]+value="([^"]*)"', html):
+        fields[m.group(1)] = m.group(2)
+    return fields
+
+
+# ── Session management ────────────────────────────────────────────────────────
+
+def _acquire_session() -> cffi_requests.Session:
+    """Launch browser, solve Turnstile once, return HTTP session with cookie."""
+    print("[inspection] Launching browser to solve Turnstile...")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
+        page = browser.new_page()
         page.goto("https://www.mytxcar.org/TXCar_Net/VehicleTestDetail.aspx", timeout=60000)
 
-        # Try auto-resolve first; if it stalls, the checkbox appeared — click it
         try:
             page.wait_for_function(
                 "document.querySelector('[name=\"cf-turnstile-response\"]').value.length > 0",
@@ -48,68 +100,108 @@ def _attempt_inspection(vin, p):
             )
 
         page.locator('input[type="submit"]').click()
-
         page.wait_for_selector("#txtVin", timeout=15000)
-        page.locator("#txtVin").fill(vin)
-        page.locator('input[title="Search"]').click()
 
-        # Wait for either record links or the results div (present even when empty)
-        page.wait_for_selector(f"{sel}, #resultsDiv", timeout=10000)
+        cookies = {c["name"]: c["value"] for c in page.context.cookies()}
+        session_id = cookies.get("ASP.NET_SessionId")
+        browser.close()
 
-        if not page.locator(sel).count():
-            print(f"[inspection] No TX records for {vin}, skipping.")
-            return True
+    print(f"[inspection] Session acquired: {session_id}")
+    return cffi_requests.Session(
+        impersonate="chrome120",
+        cookies={"ASP.NET_SessionId": session_id}
+    )
 
-        results, seen_years = [], set()
-        while len(results) < 3:
-            rows = page.evaluate("""
-                () => Array.from(document.querySelectorAll('a[onclick*="DoSelect"]')).map(a => ({
-                    date: a.getAttribute('aria-label').split(' Click')[0].split(' ')[0],
-                    idx: Array.from(document.querySelectorAll('a[onclick*="DoSelect"]')).indexOf(a)
-                }))
-            """)
 
-            target = next(
-                (r for r in rows if r['date'].split('/')[-1] not in seen_years),
-                None
-            )
-            if not target:
-                break
+def _get_session() -> cffi_requests.Session:
+    global _http_session
+    with _session_lock:
+        if _http_session is None:
+            _http_session = _acquire_session()
+        return _http_session
 
-            year = target['date'].split('/')[-1].split(' ')[0][:4]
-            seen_years.add(year)
 
-            with page.expect_navigation(wait_until="domcontentloaded"):
-                page.locator(sel).nth(target['idx']).click()
+def _reset_session():
+    global _http_session
+    with _session_lock:
+        _http_session = None
 
-            try:
-                page.wait_for_selector("td:has-text('Odometer')", timeout=10000)
-                miles = page.locator("td:has-text('Odometer') + td").inner_text().strip()
-            except Exception:
-                miles = ""
 
-            with page.expect_navigation(wait_until="domcontentloaded"):
-                page.locator("#btnBack").click()
-            page.wait_for_selector(sel, timeout=10000)
+# ── VIN lookup ────────────────────────────────────────────────────────────────
 
-            if not miles:
-                continue
-            results.append({"date": target['date'], "odometer": int(miles.replace(',', ''))})
+def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
+    r = session.get(SEARCH_URL, timeout=15)
+    hidden = _extract_hidden(r.text)
 
-        save_history(vin, results)
-        print(f"[inspection] Saved {len(results)} records for {vin}")
-        return True
+    r = session.post(SEARCH_URL, data={**hidden, "txtVin": vin, "btnSearch": "Search"}, timeout=15)
+    html = r.text
 
-    except Exception as e:
-        print(f"[inspection] Error for {vin}: {e}")
-        return False
-    finally:
+    parser = _LinkParser()
+    parser.feed(html)
+    if not parser.links:
+        return []
+
+    result_hidden = _extract_hidden(html)
+    results, seen_years = [], set()
+    for link in parser.links[:6]:
+        year = link["date"].split("/")[-1].split(" ")[0][:4]
+        if year in seen_years or len(results) >= 3:
+            continue
+        seen_years.add(year)
+
+        detail_data = {
+            **result_hidden,
+            "hidAction":      "SelectSearch",
+            "hidSearchType":  link["search_type"],
+            "hidCode":        link["vin"],
+            "hidSelectedRow": link["row_id"],
+            "hidTasId":       "",
+        }
         try:
-            browser.close()
+            r = session.post(HISTORY_URL, data=detail_data, timeout=15)
+            odo = _OdometerParser()
+            odo.feed(r.text)
+            if odo.odometer:
+                results.append({"date": link["date"], "odometer": odo.odometer})
         except Exception:
-            pass
+            continue
+
+    return results
 
 
-def run_inspection_scrape(vin):
-    with sync_playwright() as p:
-        _attempt_inspection(vin, p)
+# ── DB save ───────────────────────────────────────────────────────────────────
+
+def _save_history(vin: str, results: list[dict]):
+    if not results:
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        for i, res in enumerate(results):
+            conn.execute(
+                "INSERT OR REPLACE INTO odometer_history VALUES (?, ?, ?, ?)",
+                (f"{vin}_{i}", vin, res["date"], res["odometer"])
+            )
+        display = "\n".join(f"{r['date']}: {r['odometer']:,}" for r in results)
+        conn.execute("UPDATE vehicles SET last_recorded_odo = ? WHERE vin = ?", (display, vin))
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+
+def run_inspection_batch(vins: list[str], workers: int = 10):
+    """Run inspections for a list of VINs in parallel, sharing one session."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    session = _get_session()
+
+    def _process(vin: str):
+        try:
+            results = _lookup_vin(vin, session)
+            _save_history(vin, results)
+            print(f"[inspection] {vin}: {len(results)} record(s)")
+        except Exception as e:
+            print(f"[inspection] Error for {vin}: {e}")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_process, vin) for vin in vins]
+        for future in as_completed(futures):
+            future.result()
