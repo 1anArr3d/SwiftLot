@@ -175,7 +175,7 @@ def save_vehicle(conn, item: dict, auction_id: str, region_id: str):
 
 
 def scrape_data(auction_id: str, region_id: str) -> int:
-    """Fetch all vehicles for an auction via API and save to DB. Returns vehicle count."""
+    """Fetch all vehicles for a single auction via API. Used for manual triggers."""
     full_id = auction_id if auction_id.startswith("auction-") else f"auction-{auction_id}"
     print(f"[scraper] Fetching inventory for {full_id} ({region_id})...")
     items = autura_api.get_inventory(region_id, full_id)
@@ -185,7 +185,6 @@ def scrape_data(auction_id: str, region_id: str) -> int:
     if not valid:
         return 0
 
-    # Fetch full image lists in parallel (one Firestore call per item)
     image_map: dict[str, list[str]] = {}
     with ThreadPoolExecutor(max_workers=10) as pool:
         futures = {pool.submit(autura_api.get_item_images, item["key"]): item["key"]
@@ -197,7 +196,6 @@ def scrape_data(auction_id: str, region_id: str) -> int:
     saved = 0
     with sqlite3.connect(DB_PATH) as conn:
         for item in valid:
-            # Inject fetched images into item before saving
             item_key = item.get("key")
             if item_key and image_map.get(item_key):
                 item["_images_override"] = image_map[item_key]
@@ -207,3 +205,42 @@ def scrape_data(auction_id: str, region_id: str) -> int:
 
     print(f"[scraper] Saved {saved} vehicles for {full_id}")
     return saved
+
+
+def scrape_all_published() -> dict[str, int]:
+    """
+    Fetch all published vehicles nationwide in one API call.
+    Returns {auction_id: vehicle_count} for updating auctions table.
+    """
+    print("[scraper] Fetching all published vehicles...")
+    result = autura_api._post(autura_api._SEARCH_HTTP, "searchEngine-getPublishedVehiclesForFilters", {"limit": 2000})
+    all_items = result.get("result", {}).get("vehicles", [])
+    valid = [item for item in all_items if (item.get("info") or {}).get("vin")]
+    print(f"[scraper] Got {len(valid)} published vehicles with VINs")
+
+    if not valid:
+        return {}
+
+    # Fetch full image sets in parallel
+    image_map: dict[str, list[str]] = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(autura_api.get_item_images, item["key"]): item["key"]
+                   for item in valid if item.get("key")}
+        for future in as_completed(futures):
+            key = futures[future]
+            image_map[key] = future.result()
+
+    counts: dict[str, int] = {}
+    with sqlite3.connect(DB_PATH) as conn:
+        for item in valid:
+            auction_id = item.get("auctionId", "")
+            region_id  = item.get("regionId", "")
+            item_key   = item.get("key")
+            if item_key and image_map.get(item_key):
+                item["_images_override"] = image_map[item_key]
+            save_vehicle(conn, item, auction_id, region_id)
+            counts[auction_id] = counts.get(auction_id, 0) + 1
+        conn.commit()
+
+    print(f"[scraper] Saved {len(valid)} vehicles across {len(counts)} auctions")
+    return counts
