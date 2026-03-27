@@ -6,7 +6,7 @@ from config import DB_PATH
 from state import scrape_status, discovery_status, inspection_status
 import auction_scraper as scraper
 import inspection_scraper as inspection
-import discovery
+import auction_discovery as discovery
 import sqlite3
 import threading
 
@@ -19,7 +19,12 @@ router = APIRouter(prefix="/api/v1")
 
 @router.get("/auctions", response_model=list[Auction], tags=["auctions"])
 def get_auctions():
-    rows = query("SELECT * FROM auctions ORDER BY seller_name")
+    rows = query("""
+        SELECT * FROM auctions
+        WHERE auction_status != 'completed'
+          AND (vehicles_listed IS NULL OR vehicles_listed > 0)
+        ORDER BY seller_name
+    """)
     return [dict(row) for row in rows]
 
 
@@ -69,17 +74,29 @@ def add_to_watchlist(vin: str):
         raise HTTPException(status_code=404, detail="Vehicle not found")
     with get_db() as conn:
         conn.execute('''
-            INSERT OR IGNORE INTO watchlist
-                (vin, year, make, model, color, key_status, catalytic_converter,
-                 start_status, engine_type, transmission, auction_id, city,
-                 last_recorded_odo, images, liked_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            INSERT OR IGNORE INTO watchlist (
+                vin, year, make, model, body_type, color, key_status, catalytic_converter,
+                start_status, engine_type, drivetrain, fuel_type, num_cylinders,
+                documentation_type, auction_id, region_id, seller_id, item_id, item_key,
+                current_bid, bid_expiration, reserve_price, fee_price,
+                images, images_count, last_recorded_odo, liked_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, datetime('now')
+            )
         ''', (
             vehicle["vin"], vehicle["year"], vehicle["make"], vehicle["model"],
-            vehicle["color"], vehicle["key_status"], vehicle["catalytic_converter"],
-            vehicle["start_status"], vehicle["engine_type"], vehicle["transmission"],
-            vehicle["auction_id"], vehicle["city"], vehicle["last_recorded_odo"],
-            vehicle["images"]
+            vehicle["body_type"], vehicle["color"], vehicle["key_status"],
+            vehicle["catalytic_converter"], vehicle["start_status"], vehicle["engine_type"],
+            vehicle["drivetrain"], vehicle["fuel_type"], vehicle["num_cylinders"],
+            vehicle["documentation_type"], vehicle["auction_id"], vehicle["region_id"],
+            vehicle["seller_id"], vehicle["item_id"], vehicle["item_key"],
+            vehicle["current_bid"], vehicle["bid_expiration"],
+            vehicle["reserve_price"], vehicle["fee_price"],
+            vehicle["images"], vehicle["images_count"], vehicle["last_recorded_odo"],
         ))
     return {"status": "added", "vin": vin}
 
@@ -98,17 +115,17 @@ def _run_inspections(vins: list[str]):
         pool.map(inspection.run_inspection_scrape, vins)
 
 
-def _run_scrape(auction_id: str, city: str):
+def _run_scrape(auction_id: str, region_id: str):
     try:
         scrape_status[auction_id] = "running"
-        scraper.scrape_data(auction_id, city)
+        count = scraper.scrape_data(auction_id, region_id)
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute(
-                "UPDATE auctions SET last_scraped_count = vehicles_listed WHERE auction_id = ?",
-                (auction_id,)
+                "UPDATE auctions SET last_scraped_count = ?, vehicles_listed = ?, last_scraped_at = datetime('now') WHERE auction_id = ?",
+                (count, count, auction_id)
             )
         scrape_status[auction_id] = "done"
-        if city and city.endswith('-TX'):
+        if region_id and region_id.endswith('-TX'):
             rows = query(
                 "SELECT vin FROM vehicles WHERE auction_id = ? AND last_recorded_odo IS NULL",
                 (auction_id,)
@@ -132,10 +149,10 @@ def _run_inspection(vin: str):
         inspection_status[vin] = "failed"
 
 
-def _run_discovery(key: str, state: str, region_id: str = None):
+def _run_discovery(key: str):
     try:
         discovery_status[key] = "running"
-        discovery.run_discovery(state, region_id)
+        discovery.run_discovery()
         discovery_status[key] = "done"
     except Exception as e:
         print(f"[discovery] ERROR: {e}")
@@ -181,21 +198,19 @@ def get_inspection_status(vin: str):
 
 
 @router.post("/discovery/run", tags=["jobs"])
-def start_discovery(background_tasks: BackgroundTasks, state: str = "TX", region: str = None):
-    key = region or state
-    if discovery_status.get(key) == "running":
+def start_discovery(background_tasks: BackgroundTasks):
+    if discovery_status.get("global") == "running":
         raise HTTPException(status_code=409, detail="Discovery already in progress")
-    background_tasks.add_task(_run_discovery, key, state, region)
-    return {"status": "started", "key": key}
+    background_tasks.add_task(_run_discovery, "global")
+    return {"status": "started"}
 
 
 @router.get("/discovery/status", response_model=JobStatus, tags=["jobs"])
-def get_discovery_status(state: str = "TX", region: str = None):
-    key = region or state
-    status = discovery_status.get(key)
+def get_discovery_status():
+    status = discovery_status.get("global")
     if status is None:
         raise HTTPException(status_code=404, detail="No discovery job found")
-    return {"id": key, "status": status}
+    return {"id": "global", "status": status}
 
 
 @router.post("/pipeline/run", tags=["jobs"])

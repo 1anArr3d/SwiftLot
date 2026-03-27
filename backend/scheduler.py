@@ -8,7 +8,7 @@ import auction_discovery as discovery
 
 def scheduled_discovery_and_scrape():
     print("[scheduler] Running scheduled discovery...")
-    discovery.run_discovery("TX")
+    discovery.run_discovery()
 
     with get_db() as conn:
         conn.execute("""
@@ -19,9 +19,9 @@ def scheduled_discovery_and_scrape():
 
     rows = query("""
         SELECT auction_id, region_id FROM auctions
-        WHERE vehicles_listed > 0
-          AND auction_status != 'completed'
-          AND (last_scraped_count IS NULL OR last_scraped_count != vehicles_listed)
+        WHERE auction_status != 'completed'
+          AND (vehicles_listed IS NULL OR vehicles_listed > 0)
+          AND (last_scraped_at IS NULL OR last_scraped_at < datetime('now', '-6 hours'))
     """)
 
     for row in rows:
@@ -30,7 +30,7 @@ def scheduled_discovery_and_scrape():
             print(f"[scheduler] Triggering scrape for {auction_id}")
             _run_scrape(auction_id, row["region_id"])
 
-    print("[scheduler] Done.")
+    print("[scheduler] ✓ Pipeline complete.")
 
 
 def create_scheduler() -> BackgroundScheduler:
