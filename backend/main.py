@@ -2,8 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from config import ALLOWED_ORIGINS
+import threading
 from db import init_db
 from scheduler import create_scheduler
+import historical_harvester as harvester
 
 from routes import router
 
@@ -11,6 +13,8 @@ from routes import router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+
+    threading.Thread(target=_seed_historical, daemon=True).start()
 
     scheduler = create_scheduler()
     scheduler.start()
@@ -20,6 +24,11 @@ async def lifespan(app: FastAPI):
 
     scheduler.shutdown(wait=False)
     print("[scheduler] Stopped.")
+
+
+def _seed_historical():
+    harvester.seed_from_json()
+    harvester.harvest_api()
 
 
 app = FastAPI(title="SwiftLot API", version="1.0.0", lifespan=lifespan)

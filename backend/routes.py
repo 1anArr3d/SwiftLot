@@ -47,6 +47,70 @@ def get_auction_vehicles(auction_id: str):
     return [dict(row) for row in rows]
 
 
+# ── Historical Sales ──────────────────────────────────────────────────────────
+
+@router.get("/vehicles/{vin}/history", tags=["vehicles"])
+def get_vehicle_history(vin: str):
+    rows = query(
+        "SELECT * FROM historical_sales WHERE vin = ? ORDER BY sold_at DESC",
+        (vin,)
+    )
+    return [dict(row) for row in rows]
+
+
+@router.get("/historical/stats", tags=["historical"])
+def get_historical_stats(make: str, model: str, year: int):
+    row = query(
+        """SELECT
+               COUNT(*)        AS count,
+               ROUND(AVG(final_sale), 0) AS avg_sale,
+               MIN(final_sale) AS min_sale,
+               MAX(final_sale) AS max_sale
+           FROM historical_sales
+           WHERE UPPER(make) = UPPER(?)
+             AND UPPER(model) = UPPER(?)
+             AND year = ?
+             AND final_sale IS NOT NULL""",
+        (make, model, year),
+        one=True,
+    )
+    if not row or row["count"] < 3:
+        return {"make": make, "model": model, "year": year, "count": 0}
+    return {
+        "make": make,
+        "model": model,
+        "year": year,
+        "count": row["count"],
+        "avg_sale": row["avg_sale"],
+        "min_sale": row["min_sale"],
+        "max_sale": row["max_sale"],
+    }
+
+
+@router.get("/historical/search", tags=["historical"])
+def search_historical(make: str = None, model: str = None, year: int = None, region_id: str = None, limit: int = 50):
+    filters, args = [], []
+    if make:
+        filters.append("UPPER(make) = UPPER(?)")
+        args.append(make)
+    if model:
+        filters.append("UPPER(model) LIKE UPPER(?)")
+        args.append(f"%{model}%")
+    if year:
+        filters.append("year = ?")
+        args.append(year)
+    if region_id:
+        filters.append("region_id = ?")
+        args.append(region_id)
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    args.append(limit)
+    rows = query(
+        f"SELECT * FROM historical_sales {where} ORDER BY sold_at DESC LIMIT ?",
+        tuple(args)
+    )
+    return [dict(row) for row in rows]
+
+
 # ── Vehicles ──────────────────────────────────────────────────────────────────
 
 

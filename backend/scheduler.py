@@ -8,6 +8,7 @@ from routes import _run_scrape
 import auction_discovery as discovery
 import auction_scraper as scraper
 import inspection_scraper as inspection
+import historical_harvester as harvester
 
 
 def scheduled_discovery_and_scrape():
@@ -48,6 +49,18 @@ def scheduled_discovery_and_scrape():
     if vins:
         print(f"[scheduler] Firing inspection for {len(vins)} TX VINs")
         threading.Thread(target=inspection.run_inspection_batch, args=(vins,), daemon=True).start()
+
+    # Harvest any completed auctions that haven't been captured yet
+    unharvested = query("""
+        SELECT auction_id, region_id FROM auctions
+        WHERE auction_status = 'completed' AND (harvested IS NULL OR harvested = 0)
+    """)
+    for row in unharvested:
+        threading.Thread(
+            target=harvester.harvest_auction,
+            args=(row["region_id"], row["auction_id"]),
+            daemon=True
+        ).start()
 
     print("[scheduler] ✓ Pipeline complete.")
 

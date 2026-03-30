@@ -2,7 +2,7 @@ import sqlite3
 from config import DB_PATH
 
 # Bump this when the schema changes to trigger a migration
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def get_db() -> sqlite3.Connection:
@@ -22,10 +22,14 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         current = conn.execute("PRAGMA user_version").fetchone()[0]
         if current < SCHEMA_VERSION:
-            # Schema changed — drop and recreate (preserves odometer_history)
-            conn.execute("DROP TABLE IF EXISTS watchlist")
-            conn.execute("DROP TABLE IF EXISTS vehicles")
-            conn.execute("DROP TABLE IF EXISTS auctions")
+            if current < 3:
+                # Pre-v3: drop and recreate core tables
+                conn.execute("DROP TABLE IF EXISTS watchlist")
+                conn.execute("DROP TABLE IF EXISTS vehicles")
+                conn.execute("DROP TABLE IF EXISTS auctions")
+            if current == 3:
+                # v3 → v4: non-destructive, just add harvested column
+                conn.execute("ALTER TABLE auctions ADD COLUMN harvested INTEGER DEFAULT 0")
 
         conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
             auction_id         TEXT PRIMARY KEY,
@@ -39,7 +43,8 @@ def init_db():
             series_key         TEXT,
             minimum_bid        REAL,
             sales_tax          REAL,
-            ended_at           TEXT
+            ended_at           TEXT,
+            harvested          INTEGER DEFAULT 0
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS vehicles (
@@ -108,6 +113,23 @@ def init_db():
             images_count       INTEGER,
             last_recorded_odo  TEXT,
             liked_at           TEXT
+        )''')
+
+        conn.execute('''CREATE TABLE IF NOT EXISTS historical_sales (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            vin         TEXT,
+            year        INTEGER,
+            make        TEXT,
+            model       TEXT,
+            color       TEXT,
+            key_status  TEXT,
+            region_id   TEXT,
+            auction_id  TEXT,
+            final_sale  REAL,
+            fees_total  REAL,
+            sold_at     TEXT,
+            source      TEXT,
+            UNIQUE(vin, auction_id)
         )''')
 
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
