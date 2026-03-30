@@ -1,6 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
@@ -8,6 +12,8 @@ from scheduler import create_scheduler
 import historical_harvester as harvester
 
 from routes import router
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 
 @asynccontextmanager
@@ -32,6 +38,9 @@ def _seed_historical():
 
 
 app = FastAPI(title="SwiftLot API", version="1.0.0", lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

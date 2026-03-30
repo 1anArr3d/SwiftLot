@@ -5,12 +5,13 @@ Verifies Firebase ID tokens and extracts the user_id.
 import os
 import firebase_admin
 from firebase_admin import credentials, auth
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Depends
 from dotenv import load_dotenv
 
 load_dotenv()
 
 _cred_path = os.path.join(os.path.dirname(__file__), os.getenv("FIREBASE_CREDENTIALS", ""))
+ADMIN_UID = os.getenv("ADMIN_UID")
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(_cred_path)
@@ -18,15 +19,6 @@ if not firebase_admin._apps:
 
 
 def get_current_user(authorization: str = Header(...)) -> str:
-    """
-    Dependency — extracts and verifies Firebase ID token from Authorization header.
-    Returns the user's uid.
-
-    Usage in routes:
-        @router.get("/protected")
-        def protected(user_id: str = Depends(get_current_user)):
-            ...
-    """
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     token = authorization.split("Bearer ")[1]
@@ -39,3 +31,9 @@ def get_current_user(authorization: str = Header(...)) -> str:
         raise HTTPException(status_code=401, detail="Invalid token")
     except Exception:
         raise HTTPException(status_code=401, detail="Authentication failed")
+
+
+def require_admin(user_id: str = Depends(get_current_user)) -> str:
+    if user_id != ADMIN_UID:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user_id

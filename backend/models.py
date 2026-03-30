@@ -51,6 +51,15 @@ class WatchlistVehicle(Vehicle):
     liked_at: Optional[str] = None
 
 
+class SavedAuction(BaseModel):
+    auction_id: str
+    region_id: Optional[str] = None
+    seller_name: Optional[str] = None
+    auction_status: Optional[str] = None
+    vehicles_listed: Optional[int] = None
+    saved_at: Optional[str] = None
+
+
 class OdometerEntry(BaseModel):
     row_id: str
     vin: str

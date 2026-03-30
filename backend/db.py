@@ -2,7 +2,7 @@ import sqlite3
 from config import DB_PATH
 
 # Bump this when the schema changes to trigger a migration
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def get_db() -> sqlite3.Connection:
@@ -33,6 +33,14 @@ def init_db():
             if current == 4:
                 # v4 → v5: add user_id to watchlist for per-user isolation
                 conn.execute("ALTER TABLE watchlist ADD COLUMN user_id TEXT")
+            if current == 5:
+                # v5 → v6: add saved_auctions table
+                conn.execute('''CREATE TABLE IF NOT EXISTS saved_auctions (
+                    auction_id  TEXT,
+                    user_id     TEXT,
+                    saved_at    TEXT,
+                    PRIMARY KEY (auction_id, user_id)
+                )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
             auction_id         TEXT PRIMARY KEY,
@@ -135,6 +143,13 @@ def init_db():
             sold_at     TEXT,
             source      TEXT,
             UNIQUE(vin, auction_id)
+        )''')
+
+        conn.execute('''CREATE TABLE IF NOT EXISTS saved_auctions (
+            auction_id  TEXT,
+            user_id     TEXT,
+            saved_at    TEXT,
+            PRIMARY KEY (auction_id, user_id)
         )''')
 
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

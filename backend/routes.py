@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from db import query, get_db
-from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, JobStatus
+from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, SavedAuction, JobStatus
 from config import DB_PATH
 from state import scrape_status, discovery_status, inspection_status
 import auction_scraper as scraper
@@ -35,7 +35,7 @@ def get_auction(auction_id: str):
 
 
 @router.delete("/auctions", tags=["auctions"])
-def delete_auctions():
+def delete_auctions(user_id: str = Depends(require_admin)):
     with get_db() as conn:
         conn.execute("DELETE FROM vehicles")
         conn.execute("DELETE FROM auctions")
@@ -170,6 +170,44 @@ def remove_from_watchlist(vin: str, user_id: str = Depends(get_current_user)):
     return {"status": "removed", "vin": vin}
 
 
+# ── Saved Auctions ────────────────────────────────────────────────────────────
+
+@router.get("/saved-auctions", response_model=list[SavedAuction], tags=["saved-auctions"])
+def get_saved_auctions(user_id: str = Depends(get_current_user)):
+    rows = query("""
+        SELECT a.auction_id, a.region_id, a.seller_name, a.auction_status,
+               a.vehicles_listed, s.saved_at
+        FROM saved_auctions s
+        JOIN auctions a ON s.auction_id = a.auction_id
+        WHERE s.user_id = ?
+        ORDER BY s.saved_at DESC
+    """, (user_id,))
+    return [dict(row) for row in rows]
+
+
+@router.post("/saved-auctions/{auction_id}", tags=["saved-auctions"])
+def save_auction(auction_id: str, user_id: str = Depends(get_current_user)):
+    auction = query("SELECT auction_id FROM auctions WHERE auction_id = ?", (auction_id,), one=True)
+    if not auction:
+        raise HTTPException(status_code=404, detail="Auction not found")
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO saved_auctions (auction_id, user_id, saved_at) VALUES (?, ?, datetime('now'))",
+            (auction_id, user_id)
+        )
+    return {"status": "saved", "auction_id": auction_id}
+
+
+@router.delete("/saved-auctions/{auction_id}", tags=["saved-auctions"])
+def unsave_auction(auction_id: str, user_id: str = Depends(get_current_user)):
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM saved_auctions WHERE auction_id = ? AND user_id = ?",
+            (auction_id, user_id)
+        )
+    return {"status": "removed", "auction_id": auction_id}
+
+
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 
 def _run_scrape(auction_id: str, region_id: str):
@@ -222,7 +260,7 @@ def _run_pipeline(state: str):
 
 
 @router.post("/scrape/{auction_id}", tags=["jobs"])
-def start_scrape(auction_id: str, background_tasks: BackgroundTasks):
+def start_scrape(auction_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
     row = query("SELECT region_id FROM auctions WHERE auction_id = ?", (auction_id,), one=True)
     if not row:
         raise HTTPException(status_code=404, detail="Auction not found")
@@ -233,7 +271,7 @@ def start_scrape(auction_id: str, background_tasks: BackgroundTasks):
 
 
 @router.get("/scrape/{auction_id}/status", response_model=JobStatus, tags=["jobs"])
-def get_scrape_status(auction_id: str):
+def get_scrape_status(auction_id: str, user_id: str = Depends(require_admin)):
     status = scrape_status.get(auction_id)
     if status is None:
         raise HTTPException(status_code=404, detail="No scrape job found")
@@ -241,13 +279,13 @@ def get_scrape_status(auction_id: str):
 
 
 @router.post("/inspectionscrape/{vin}", tags=["jobs"])
-def start_inspection(vin: str, background_tasks: BackgroundTasks):
+def start_inspection(vin: str, background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
     background_tasks.add_task(_run_inspection, vin)
     return {"status": "started", "vin": vin}
 
 
 @router.get("/inspectionscrape/{vin}/status", response_model=JobStatus, tags=["jobs"])
-def get_inspection_status(vin: str):
+def get_inspection_status(vin: str, user_id: str = Depends(require_admin)):
     status = inspection_status.get(vin)
     if status is None:
         raise HTTPException(status_code=404, detail="No inspection job found")
@@ -255,7 +293,7 @@ def get_inspection_status(vin: str):
 
 
 @router.post("/discovery/run", tags=["jobs"])
-def start_discovery(background_tasks: BackgroundTasks):
+def start_discovery(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
     if discovery_status.get("global") == "running":
         raise HTTPException(status_code=409, detail="Discovery already in progress")
     background_tasks.add_task(_run_discovery, "global")
@@ -263,7 +301,7 @@ def start_discovery(background_tasks: BackgroundTasks):
 
 
 @router.get("/discovery/status", response_model=JobStatus, tags=["jobs"])
-def get_discovery_status():
+def get_discovery_status(user_id: str = Depends(require_admin)):
     status = discovery_status.get("global")
     if status is None:
         raise HTTPException(status_code=404, detail="No discovery job found")
@@ -271,6 +309,6 @@ def get_discovery_status():
 
 
 @router.post("/pipeline/run", tags=["jobs"])
-def run_full_pipeline(background_tasks: BackgroundTasks, state: str = "TX"):
+def run_full_pipeline(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin), state: str = "TX"):
     background_tasks.add_task(_run_pipeline, state)
     return {"status": "started", "state": state}
