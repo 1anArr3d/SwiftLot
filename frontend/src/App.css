@@ -51,7 +51,7 @@ input, button { font-family: var(--font); }
 .nav-link.active { color: var(--sky-light); border-bottom-color: var(--sky-light); }
 
 /* BUTTONS */
-.btn, .btn-pipeline, .clear-all-btn {
+.btn, .clear-all-btn {
   border-radius: var(--radius-md); font-weight: 700;
   letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
 }
@@ -63,14 +63,6 @@ input, button { font-family: var(--font); }
 }
 .btn:hover, .btn.saved { border-color: var(--sky-light); color: var(--sky-light); }
 
-.btn-pipeline {
-  background: #1a5c2e; border: 1px solid var(--accent-green);
-  color: var(--accent-green); font-size: 11px; padding: 4px 14px;
-  transition: box-shadow 0.15s, opacity 0.15s;
-}
-.btn-pipeline:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(46,204,113,0.3); }
-.btn-pipeline:disabled { opacity: 0.55; cursor: default; }
-.btn-pipeline.running  { border-style: dashed; opacity: 0.7; }
 
 .clear-all-btn {
   background: #5c1a1a; border: 1px solid var(--accent-red);
@@ -94,12 +86,21 @@ input, button { font-family: var(--font); }
 
 .vehicle-count-badge { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sky-dim); background: var(--btn); border: 1px solid var(--border-btn); border-radius: var(--radius-md); padding: 4px 12px; white-space: nowrap; }
 
+/* STATE SECTIONS */
+.state-section { margin-bottom: var(--space-sm); }
+.state-section-header { display: flex; justify-content: space-between; align-items: center; padding: var(--space-md) var(--space-lg); background: var(--hero); border: 1px solid var(--border-dim); border-radius: var(--radius-md); cursor: pointer; transition: border-color 0.15s; user-select: none; margin-bottom: var(--space-sm); }
+.state-section-header:hover { border-color: var(--border-bright); }
+.state-section-label { font-size: 16px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-primary); }
+.state-section-right { display: flex; align-items: center; gap: var(--space-md); }
+.state-section-count { font-size: 12px; color: var(--text-secondary); letter-spacing: 0.08em; }
+.state-section-toggle { font-size: 11px; color: var(--text-secondary); }
+.state-body { padding: 0 var(--space-sm); }
+
 /* REGION SECTIONS */
-.region-section { margin-bottom: 48px; }
-.region-hero { height: 160px; border-radius: var(--radius-md); overflow: hidden; background: var(--hero); border: 1px solid var(--border-bright); margin-bottom: var(--space-md); position: relative; }
+.region-section { margin-bottom: 32px; }
+.region-hero { height: 120px; border-radius: var(--radius-md); overflow: hidden; background: var(--hero); border: 1px solid var(--border-bright); margin-bottom: var(--space-md); position: relative; }
 .region-hero-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; padding: var(--space-md) var(--space-lg); }
-.region-hero-title { margin: 0; font-size: 28px; font-weight: 700; color: #fff; letter-spacing: 0.04em; text-shadow: 0 2px 8px rgba(0,0,0,0.6); }
-.region-section-label { font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-secondary); }
+.region-hero-title { margin: 0; font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.04em; text-shadow: 0 2px 8px rgba(0,0,0,0.6); }
 
 /* AUCTION CARDS */
 .auction-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-md); }
@@ -172,10 +173,12 @@ input, button { font-family: var(--font); }
 .row-clickable:hover { background-color: var(--bg-row-hover) !important; }
 .row-expanded { background-color: var(--bg-row-expanded) !important; border-left: 3px solid var(--steel-highlight); }
 
-.cat-present { color: var(--accent-green); }
-.cat-missing  { color: var(--accent-red); }
-.vin-text     { color: var(--text-secondary); }
-.odo-text     { white-space: pre-line; line-height: 1.5; color: var(--accent-blue); }
+.cat-present    { color: var(--accent-green); }
+.cat-missing    { color: var(--accent-red); }
+.vin-text       { color: var(--text-secondary); }
+.odo-text       { white-space: pre-line; line-height: 1.5; color: var(--accent-blue); }
+.avg-sale-text  { color: var(--text-secondary); }
+.bid-active     { color: var(--text-primary); }
 .empty-msg    { padding: var(--space-md); text-align: center; color: var(--text-primary); letter-spacing: 0.1em; text-transform: uppercase; }
 
 /* EXPANDED ROW */
