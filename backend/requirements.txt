@@ -5,3 +5,4 @@ APScheduler==3.11.2
 python-dotenv==1.2.1
 pydantic==2.12.5
 curl_cffi==0.14.0
+firebase-admin==7.3.0

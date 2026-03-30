@@ -2,7 +2,7 @@ import sqlite3
 from config import DB_PATH
 
 # Bump this when the schema changes to trigger a migration
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def get_db() -> sqlite3.Connection:
@@ -30,6 +30,9 @@ def init_db():
             if current == 3:
                 # v3 → v4: non-destructive, just add harvested column
                 conn.execute("ALTER TABLE auctions ADD COLUMN harvested INTEGER DEFAULT 0")
+            if current == 4:
+                # v4 → v5: add user_id to watchlist for per-user isolation
+                conn.execute("ALTER TABLE watchlist ADD COLUMN user_id TEXT")
 
         conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
             auction_id         TEXT PRIMARY KEY,
@@ -86,7 +89,8 @@ def init_db():
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS watchlist (
-            vin                TEXT PRIMARY KEY,
+            vin                TEXT,
+            user_id            TEXT,
             year               INTEGER,
             make               TEXT,
             model              TEXT,
@@ -112,7 +116,8 @@ def init_db():
             images             TEXT,
             images_count       INTEGER,
             last_recorded_odo  TEXT,
-            liked_at           TEXT
+            liked_at           TEXT,
+            PRIMARY KEY (vin, user_id)
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS historical_sales (

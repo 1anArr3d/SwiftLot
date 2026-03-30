@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from auth import get_current_user
 from db import query, get_db
 from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, JobStatus
 from config import DB_PATH
@@ -123,33 +124,33 @@ def get_odometer_history(vin: str):
 # ── Watchlist ─────────────────────────────────────────────────────────────────
 
 @router.get("/watchlist", response_model=list[WatchlistVehicle], tags=["watchlist"])
-def get_watchlist():
-    rows = query("SELECT * FROM watchlist ORDER BY liked_at DESC")
+def get_watchlist(user_id: str = Depends(get_current_user)):
+    rows = query("SELECT * FROM watchlist WHERE user_id = ? ORDER BY liked_at DESC", (user_id,))
     return [dict(row) for row in rows]
 
 
 @router.post("/watchlist/{vin}", tags=["watchlist"])
-def add_to_watchlist(vin: str):
+def add_to_watchlist(vin: str, user_id: str = Depends(get_current_user)):
     vehicle = query("SELECT * FROM vehicles WHERE vin = ?", (vin,), one=True)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     with get_db() as conn:
         conn.execute('''
             INSERT OR IGNORE INTO watchlist (
-                vin, year, make, model, body_type, color, key_status, catalytic_converter,
+                vin, user_id, year, make, model, body_type, color, key_status, catalytic_converter,
                 start_status, engine_type, drivetrain, fuel_type, num_cylinders,
                 documentation_type, auction_id, region_id, seller_id, item_id, item_key,
                 current_bid, bid_expiration, reserve_price, fee_price,
                 images, images_count, last_recorded_odo, liked_at
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, ?, datetime('now')
             )
         ''', (
-            vehicle["vin"], vehicle["year"], vehicle["make"], vehicle["model"],
+            vehicle["vin"], user_id, vehicle["year"], vehicle["make"], vehicle["model"],
             vehicle["body_type"], vehicle["color"], vehicle["key_status"],
             vehicle["catalytic_converter"], vehicle["start_status"], vehicle["engine_type"],
             vehicle["drivetrain"], vehicle["fuel_type"], vehicle["num_cylinders"],
@@ -163,9 +164,9 @@ def add_to_watchlist(vin: str):
 
 
 @router.delete("/watchlist/{vin}", tags=["watchlist"])
-def remove_from_watchlist(vin: str):
+def remove_from_watchlist(vin: str, user_id: str = Depends(get_current_user)):
     with get_db() as conn:
-        conn.execute("DELETE FROM watchlist WHERE vin = ?", (vin,))
+        conn.execute("DELETE FROM watchlist WHERE vin = ? AND user_id = ?", (vin, user_id))
     return {"status": "removed", "vin": vin}
 
 
