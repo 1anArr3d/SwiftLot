@@ -309,6 +309,6 @@ def get_discovery_status(user_id: str = Depends(require_admin)):
 
 
 @router.post("/pipeline/run", tags=["jobs"])
-def run_full_pipeline(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin), state: str = "TX"):
-    background_tasks.add_task(_run_pipeline, state)
-    return {"status": "started", "state": state}
+def run_full_pipeline(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
+    background_tasks.add_task(_run_pipeline, None)
+    return {"status": "started"}

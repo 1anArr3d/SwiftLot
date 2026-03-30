@@ -5,8 +5,11 @@ Verifies Firebase ID tokens and extracts the user_id.
 import os
 import firebase_admin
 from firebase_admin import credentials, auth
-from fastapi import Header, HTTPException, Depends
+from fastapi import HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
+
+_bearer = HTTPBearer()
 
 load_dotenv()
 
@@ -18,18 +21,16 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
 
-def get_current_user(authorization: str = Header(...)) -> str:
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-    token = authorization.split("Bearer ")[1]
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> str:
     try:
-        decoded = auth.verify_id_token(token)
+        decoded = auth.verify_id_token(credentials.credentials)
         return decoded["uid"]
     except auth.ExpiredIdTokenError:
         raise HTTPException(status_code=401, detail="Token expired")
     except auth.InvalidIdTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    except Exception:
+    except Exception as e:
+        print(f"[auth] verify_id_token error: {type(e).__name__}: {e}")
         raise HTTPException(status_code=401, detail="Authentication failed")
 
 

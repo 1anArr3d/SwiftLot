@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { API } from '../api';
+import { API, authFetch } from '../api';
+import { useAuth } from '../AuthContext';
 import FilterSection from '../components/FilterSection';
 import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
 
 const WatchlistPage = () => {
+  const { token } = useAuth();
   const [vehicles, setVehicles] = useState([]);
   const [expandedVin, setExpandedVin] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -15,15 +17,16 @@ const WatchlistPage = () => {
   });
 
   useEffect(() => {
-    fetch(`${API}/watchlist`)
+    if (!token) return;
+    authFetch(token, `${API}/watchlist`)
       .then(r => r.json())
       .then(setVehicles)
       .catch(console.error);
-  }, []);
+  }, [token]);
 
   const handleRemove = async (e, vin) => {
     e.stopPropagation();
-    await fetch(`${API}/watchlist/${vin}`, { method: 'DELETE' });
+    await authFetch(token, `${API}/watchlist/${vin}`, { method: 'DELETE' });
     setVehicles(prev => prev.filter(v => v.vin !== vin));
   };
 

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { API } from '../api';
+import { API, authFetch } from '../api';
+import { useAuth } from '../AuthContext';
 import FilterSection from '../components/FilterSection';
 import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
@@ -8,6 +9,7 @@ import ImageCycler from '../components/ImageCycler';
 const AuctionDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { token } = useAuth();
   const [auction, setAuction] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [watchlistVins, setWatchlistVins] = useState(new Set());
@@ -28,17 +30,20 @@ const AuctionDetailPage = () => {
       .then(r => r.json())
       .then(setVehicles)
       .catch(console.error);
-    fetch(`${API}/watchlist`)
-      .then(r => r.json())
-      .then(data => setWatchlistVins(new Set(data.map(v => v.vin))))
-      .catch(console.error);
-  }, [id]);
+    if (token) {
+      authFetch(token, `${API}/watchlist`)
+        .then(r => r.json())
+        .then(data => setWatchlistVins(new Set(data.map(v => v.vin))))
+        .catch(console.error);
+    }
+  }, [id, token]);
 
   const toggleWatchlist = async (e, vin) => {
     e.stopPropagation();
+    if (!token) { navigate('/login', { state: { from: window.location.pathname } }); return; }
     const inList = watchlistVins.has(vin);
     try {
-      await fetch(`${API}/watchlist/${vin}`, { method: inList ? 'DELETE' : 'POST' });
+      await authFetch(token, `${API}/watchlist/${vin}`, { method: inList ? 'DELETE' : 'POST' });
       setWatchlistVins(prev => {
         const next = new Set(prev);
         inList ? next.delete(vin) : next.add(vin);
