@@ -16,6 +16,7 @@ const AuctionDetailPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedVin, setExpandedVin] = useState(null);
   const [yearRange, setYearRange] = useState([null, null]);
+  const [histStats, setHistStats] = useState({});
   const [filters, setFilters] = useState({
     make: new Set(), model: new Set(), start_status: new Set(),
     engine_type: new Set(), drivetrain: new Set(),
@@ -54,6 +55,29 @@ const AuctionDetailPage = () => {
     }
   };
 
+  const statsKey = (v) => `${v.make}|${v.model}|${v.year}`;
+
+  useEffect(() => {
+    if (!vehicles.length) return;
+    const seen = new Set();
+    const combos = vehicles.filter(v => {
+      if (!v.make || !v.model || !v.year) return false;
+      const k = statsKey(v);
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+    Promise.all(combos.map(v =>
+      fetch(`${API}/historical/stats?make=${encodeURIComponent(v.make)}&model=${encodeURIComponent(v.model)}&year=${v.year}`)
+        .then(r => r.json())
+        .then(data => [statsKey(v), data])
+        .catch(() => null)
+    )).then(results => {
+      const map = {};
+      results.forEach(r => { if (r && r[1].count > 0) map[r[0]] = r[1]; });
+      setHistStats(map);
+    });
+  }, [vehicles]);
+
   const years = [...new Set(vehicles.map(c => c.year).filter(Boolean))].sort();
   const minYear = years[0] ? parseInt(years[0]) : 2000;
   const maxYear = years[years.length - 1] ? parseInt(years[years.length - 1]) : new Date().getFullYear();
@@ -80,7 +104,7 @@ const AuctionDetailPage = () => {
     return true;
   });
 
-  const COLS = 15;
+  const COLS = 16;
   const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
 
   return (
@@ -151,7 +175,7 @@ const AuctionDetailPage = () => {
           <table className="vehicle-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
@@ -181,6 +205,7 @@ const AuctionDetailPage = () => {
                     <td>{fmt$(car.reserve_price)}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
+                    <td className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</td>
                     <td>
                       <button
                         className={`btn${liked ? ' saved' : ''}`}
@@ -225,6 +250,7 @@ const AuctionDetailPage = () => {
                               <div className="detail-item"><span className="detail-label">Cylinders</span><span>{car.num_cylinders || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Doc Type</span><span>{car.documentation_type || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Current Bid</span><span className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</span></div>
+                              <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Reserve</span><span>{fmt$(car.reserve_price)}</span></div>
                               <div className="detail-item"><span className="detail-label">Buyer Fee</span><span>{fmt$(car.fee_price)}</span></div>
                               {car.bid_expiration && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(car.bid_expiration).toLocaleString()}</span></div>}

@@ -8,6 +8,7 @@ import ImageCycler from '../components/ImageCycler';
 const WatchlistPage = () => {
   const { token } = useAuth();
   const [vehicles, setVehicles] = useState([]);
+  const [histStats, setHistStats] = useState({});
   const [expandedVin, setExpandedVin] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [yearRange, setYearRange] = useState([null, null]);
@@ -23,6 +24,29 @@ const WatchlistPage = () => {
       .then(setVehicles)
       .catch(console.error);
   }, [token]);
+
+  const statsKey = (v) => `${v.make}|${v.model}|${v.year}`;
+
+  useEffect(() => {
+    if (!vehicles.length) return;
+    const seen = new Set();
+    const combos = vehicles.filter(v => {
+      if (!v.make || !v.model || !v.year) return false;
+      const k = statsKey(v);
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+    Promise.all(combos.map(v =>
+      fetch(`${API}/historical/stats?make=${encodeURIComponent(v.make)}&model=${encodeURIComponent(v.model)}&year=${v.year}`)
+        .then(r => r.json())
+        .then(data => [statsKey(v), data])
+        .catch(() => null)
+    )).then(results => {
+      const map = {};
+      results.forEach(r => { if (r && r[1].count > 0) map[r[0]] = r[1]; });
+      setHistStats(map);
+    });
+  }, [vehicles]);
 
   const handleRemove = async (e, vin) => {
     e.stopPropagation();
@@ -56,7 +80,8 @@ const WatchlistPage = () => {
     return true;
   });
 
-  const COLS = 13;
+  const COLS = 14;
+  const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
 
   return (
     <div className="app-wrapper">
@@ -108,7 +133,7 @@ const WatchlistPage = () => {
           <table className="vehicle-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'VIN', 'Odometer', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
@@ -135,6 +160,7 @@ const WatchlistPage = () => {
                     <td>{car.fuel_type || '—'}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
+                    <td className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</td>
                     <td>
                       <button className="btn" onClick={e => handleRemove(e, car.vin)}>Remove</button>
                     </td>
@@ -157,6 +183,9 @@ const WatchlistPage = () => {
                               <div className="detail-item"><span className="detail-label">Start Status</span><span>{car.start_status}</span></div>
                               <div className="detail-item"><span className="detail-label">Engine</span><span>{car.engine_type}</span></div>
                               <div className="detail-item"><span className="detail-label">Drivetrain</span><span>{car.drivetrain}</span></div>
+                              {histStats[statsKey(car)] && (
+                                <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{fmt$(histStats[statsKey(car)].avg_sale)}</span></div>
+                              )}
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
                                 <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}</span></div>
