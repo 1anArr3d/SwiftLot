@@ -4,12 +4,6 @@ import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
 import { REGION_LABEL, STATE_LABEL, getState } from '../constants';
 
-const STATUS_LABEL = {
-  'live-auction': 'Open',
-  'pre-auction':  'Upcoming',
-  'completed':    'Closed',
-};
-
 const AuctionsPage = () => {
   const [auctions, setAuctions] = useState([]);
   const [openStates, setOpenStates] = useState(new Set());
@@ -110,9 +104,6 @@ const AuctionsPage = () => {
                           >
                             <div className="auction-card-top">
                               <div className="auction-card-seller">{a.seller_name || a.auction_id}</div>
-                              <span className={`status-badge status-${a.auction_status}`}>
-                                {STATUS_LABEL[a.auction_status] ?? a.auction_status}
-                              </span>
                             </div>
 
                             <div className="auction-card-divider" />

@@ -6,12 +6,12 @@ Live at [swift-lot.com](https://swift-lot.com)
 
 ## Features
 
-- Scheduled pipeline runs 3x daily (8am, 2pm, 10pm CT) — no manual intervention needed
+- Full pipeline runs 5x daily (8am, 12pm, 4pm, 8pm, midnight CT) — discovery, vehicle scrape, TX inspection, and historical harvesting
+- Bid prices refresh every 15 minutes via a bulk API call across all active auctions
 - Discovers active auctions across 18 regions nationwide (400+ auctions)
-- Fetches full vehicle details per auction: VIN, year, make, model, color, condition, images
+- Fetches full vehicle details: VIN, year, make, model, color, condition, images, current bid
 - Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then batch-fetches odometer history for every VIN via authenticated HTTP
-- Skips redundant scrapes — only re-scrapes auctions when vehicle count changes
-- Historical average sale prices per year/make/model to avoid overbidding
+- Captures final sale prices from completed auctions and surfaces historical average sale prices per year/make/model
 - Firebase Auth — per-user watchlist (saved vehicles) and saved auctions
 - Filterable UI by year range, make, model, start status, engine, drivetrain
 
@@ -31,7 +31,7 @@ backend/
   db.py                 # SQLite connection and query helpers
   models.py             # Pydantic response models
   state.py              # Shared in-memory job status tracking
-  scheduler.py          # APScheduler — 3x daily pipeline
+  scheduler.py          # APScheduler — 5x daily full pipeline + 15min bid refresh
   autura_api.py         # Autura Marketplace API client
   auction_scraper.py    # Fetches vehicles per auction via API
   auction_discovery.py  # Discovers active auctions across all regions via API
@@ -60,7 +60,7 @@ frontend/
 ### Prerequisites
 
 - Python 3.10+
-- Node.js 18+
+- Node.js 20+
 
 ### Backend
 
