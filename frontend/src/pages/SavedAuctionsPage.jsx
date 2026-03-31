@@ -64,7 +64,7 @@ const SavedAuctionsPage = () => {
           {hasActiveFilters && <button className="clear-all-btn" onClick={clearAll}>Clear All</button>}
         </div>
 
-        <FilterSection title="Sort" defaultOpen={true}>
+        <FilterSection title="Sort">
           <div className="checklist">
             {[['soonest', 'Ending Soonest'], ['latest', 'Ending Latest']].map(([val, label]) => (
               <label key={val} className="checklist-item">

@@ -84,7 +84,7 @@ const WatchlistPage = () => {
     return true;
   });
 
-  const COLS = 14;
+  const COLS = 15;
   const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
 
   return (
@@ -94,7 +94,7 @@ const WatchlistPage = () => {
           <span>Filters</span>
           {hasActiveFilters && <button className="clear-all-btn" onClick={clearAll}>Clear All</button>}
         </div>
-        <FilterSection title="Year" defaultOpen={true}>
+        <FilterSection title="Year">
           <div className="year-range-labels">
             <span>{yearMin}</span><span>{yearMax}</span>
           </div>
@@ -133,10 +133,10 @@ const WatchlistPage = () => {
         </div>
 
         <div className="table-container">
-          <table className="vehicle-table">
+          <table className="vehicle-table watchlist-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
@@ -161,6 +161,7 @@ const WatchlistPage = () => {
                     <td>{car.engine_type}</td>
                     <td>{car.drivetrain}</td>
                     <td>{car.fuel_type || '—'}</td>
+                    <td>{fmt$(car.current_bid)}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
                     <td className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</td>
@@ -186,6 +187,9 @@ const WatchlistPage = () => {
                               <div className="detail-item"><span className="detail-label">Start Status</span><span>{car.start_status}</span></div>
                               <div className="detail-item"><span className="detail-label">Engine</span><span>{car.engine_type}</span></div>
                               <div className="detail-item"><span className="detail-label">Drivetrain</span><span>{car.drivetrain}</span></div>
+                              {car.current_bid != null && (
+                                <div className="detail-item"><span className="detail-label">Current Bid</span><span>{fmt$(car.current_bid)}</span></div>
+                              )}
                               {histStats[statsKey(car)] && (
                                 <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{fmt$(histStats[statsKey(car)].avg_sale)}</span></div>
                               )}

@@ -116,7 +116,7 @@ const AuctionDetailPage = () => {
           <span>Filters</span>
           {hasActiveFilters && <button className="clear-all-btn" onClick={clearAll}>Clear All</button>}
         </div>
-        <FilterSection title="Year" defaultOpen={true}>
+        <FilterSection title="Year">
           <div className="year-range-labels">
             <span>{yearMin}</span><span>{yearMax}</span>
           </div>
