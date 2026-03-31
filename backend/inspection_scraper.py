@@ -20,6 +20,7 @@ class _SessionExpired(Exception):
 
 _http_session: cffi_requests.Session | None = None
 _session_lock = threading.Lock()
+_lookup_lock = threading.Lock()
 
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
@@ -200,22 +201,23 @@ def run_inspection_batch(vins: list[str], workers: int = 10):
 
     def _process(vin: str):
         nonlocal session
-        try:
-            results = _lookup_vin(vin, session)
-            _save_history(vin, results)
-            print(f"[inspection] {vin}: {len(results)} record(s)")
-        except _SessionExpired:
-            print("[inspection] Session expired — re-acquiring...")
-            _reset_session()
-            session = _get_session()
+        with _lookup_lock:
             try:
                 results = _lookup_vin(vin, session)
                 _save_history(vin, results)
                 print(f"[inspection] {vin}: {len(results)} record(s)")
+            except _SessionExpired:
+                print("[inspection] Session expired — re-acquiring...")
+                _reset_session()
+                session = _get_session()
+                try:
+                    results = _lookup_vin(vin, session)
+                    _save_history(vin, results)
+                    print(f"[inspection] {vin}: {len(results)} record(s)")
+                except Exception as e:
+                    print(f"[inspection] Error for {vin} after re-auth: {e}")
             except Exception as e:
-                print(f"[inspection] Error for {vin} after re-auth: {e}")
-        except Exception as e:
-            print(f"[inspection] Error for {vin}: {e}")
+                print(f"[inspection] Error for {vin}: {e}")
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(_process, vin) for vin in vins]
