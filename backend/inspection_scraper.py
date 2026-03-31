@@ -15,6 +15,9 @@ from config import DB_PATH
 SEARCH_URL = "https://www.mytxcar.org/TXCar_Net/SearchVehicleTestHistory.aspx"
 HISTORY_URL = "https://www.mytxcar.org/TXCar_Net/VehicleTestHistory.aspx"
 
+class _SessionExpired(Exception):
+    pass
+
 _http_session: cffi_requests.Session | None = None
 _session_lock = threading.Lock()
 
@@ -131,6 +134,8 @@ def _reset_session():
 
 def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
     r = session.get(SEARCH_URL, timeout=15)
+    if "txtVin" not in r.text:
+        raise _SessionExpired()
     hidden = _extract_hidden(r.text)
 
     r = session.post(SEARCH_URL, data={**hidden, "txtVin": vin, "btnSearch": "Search"}, timeout=15)
@@ -194,10 +199,21 @@ def run_inspection_batch(vins: list[str], workers: int = 10):
     session = _get_session()
 
     def _process(vin: str):
+        nonlocal session
         try:
             results = _lookup_vin(vin, session)
             _save_history(vin, results)
             print(f"[inspection] {vin}: {len(results)} record(s)")
+        except _SessionExpired:
+            print("[inspection] Session expired — re-acquiring...")
+            _reset_session()
+            session = _get_session()
+            try:
+                results = _lookup_vin(vin, session)
+                _save_history(vin, results)
+                print(f"[inspection] {vin}: {len(results)} record(s)")
+            except Exception as e:
+                print(f"[inspection] Error for {vin} after re-auth: {e}")
         except Exception as e:
             print(f"[inspection] Error for {vin}: {e}")
 

@@ -24,8 +24,8 @@ def upsert_auction(conn, record: dict):
     conn.execute('''
         INSERT INTO auctions (
             auction_id, region_id, seller_name, auction_status,
-            vehicles_listed, last_discovered, series_key, minimum_bid, sales_tax, ended_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            vehicles_listed, last_discovered, series_key, minimum_bid, sales_tax, ended_at, closes_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(auction_id) DO UPDATE SET
             seller_name     = excluded.seller_name,
             auction_status  = excluded.auction_status,
@@ -33,7 +33,8 @@ def upsert_auction(conn, record: dict):
             series_key      = excluded.series_key,
             minimum_bid     = excluded.minimum_bid,
             sales_tax       = excluded.sales_tax,
-            ended_at        = excluded.ended_at
+            ended_at        = excluded.ended_at,
+            closes_at       = excluded.closes_at
     ''', (
         record["auction_id"],
         record["region_id"],
@@ -45,6 +46,7 @@ def upsert_auction(conn, record: dict):
         record.get("minimum_bid"),
         record.get("sales_tax"),
         record.get("ended_at"),
+        record.get("closes_at"),
     ))
 
 
@@ -71,6 +73,10 @@ def _discover_region(region_id: str) -> list[dict]:
             if not auction_id:
                 continue
             ended = bool(auction.get("ended"))
+            settings = auction.get("settings") or {}
+            auction_type = settings.get("auctionType", "")
+            # SEQUENCE auctions close after a live start event; LISTING auctions have an expiration
+            closes_at = settings.get("startEvent") if auction_type == "SEQUENCE" else settings.get("expiration")
             auctions.append({
                 "auction_id":     auction_id,
                 "region_id":      region_id,
@@ -80,6 +86,7 @@ def _discover_region(region_id: str) -> list[dict]:
                 "minimum_bid":    float(minimum_bid) if minimum_bid is not None else None,
                 "sales_tax":      float(sales_tax) if sales_tax is not None else None,
                 "ended_at":       _epoch_ms_to_iso(auction.get("endedAt")),
+                "closes_at":      closes_at,
             })
     return auctions
 

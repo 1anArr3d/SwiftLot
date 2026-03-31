@@ -59,9 +59,11 @@ const AuctionDetailPage = () => {
 
   useEffect(() => {
     if (!vehicles.length) return;
+    const GENERIC = new Set(['other', 'unknown', 'misc', 'n/a', 'na']);
     const seen = new Set();
     const combos = vehicles.filter(v => {
       if (!v.make || !v.model || !v.year) return false;
+      if (GENERIC.has(v.make.toLowerCase()) || GENERIC.has(v.model.toLowerCase())) return false;
       const k = statsKey(v);
       if (seen.has(k)) return false;
       seen.add(k); return true;
@@ -154,7 +156,7 @@ const AuctionDetailPage = () => {
             {auction && (
               <a
                 className="btn"
-                href={`https://app.marketplace.autura.com/auction/${auction.region_id}/auction-${id}`}
+                href={`https://app.marketplace.autura.com/auction/${auction.region_id}/${id}`}
                 target="_blank"
                 rel="noreferrer"
               >

@@ -176,7 +176,7 @@ def remove_from_watchlist(vin: str, user_id: str = Depends(get_current_user)):
 def get_saved_auctions(user_id: str = Depends(get_current_user)):
     rows = query("""
         SELECT a.auction_id, a.region_id, a.seller_name, a.auction_status,
-               a.vehicles_listed, s.saved_at
+               a.vehicles_listed, a.closes_at, s.saved_at
         FROM saved_auctions s
         JOIN auctions a ON s.auction_id = a.auction_id
         WHERE s.user_id = ?

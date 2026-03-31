@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { API } from '../api';
+import { API, authFetch } from '../api';
+import { useAuth } from '../AuthContext';
+import { REGION_LABEL, STATE_LABEL, getState } from '../constants';
 
 const STATUS_LABEL = {
   'live-auction': 'Open',
@@ -8,63 +10,12 @@ const STATUS_LABEL = {
   'completed':    'Closed',
 };
 
-const REGION_LABEL = {
-  'SA-TX':  'San Antonio, TX',
-  'AUS-TX': 'Austin, TX',
-  'DL-TX':  'Dallas – Fort Worth, TX',
-  'EP-TX':  'El Paso, TX',
-  'HOU-TX': 'Houston, TX',
-  'CHI-IL': 'Chicago, IL',
-  'DET-MI': 'Detroit, MI',
-  'IN-IN':  'Indianapolis, IN',
-  'KC-MO':  'Kansas City, MO',
-  'LAX-CA': 'Los Angeles, CA',
-  'LV-NV':  'Las Vegas, NV',
-  'LX-KY':  'Lexington, KY',
-  'NSH-TN': 'Nashville, TN',
-  'OC-CA':  'Orange County, CA',
-  'PHX-AZ': 'Phoenix, AZ',
-  'RDU-NC': 'Raleigh, NC',
-  'SBC-CA': 'San Bernardino, CA',
-  'SD-CA':  'San Diego, CA',
-  'SF-CA':  'San Francisco, CA',
-  'SJ-CA':  'San Jose, CA',
-  'VC-CA':  'Ventura County, CA',
-  'ATL-GA': 'Atlanta, GA',
-  'MIA-FL': 'Miami, FL',
-  'ORL-FL': 'Orlando, FL',
-  'DEN-CO': 'Denver, CO',
-  'SEA-WA': 'Seattle, WA',
-  'PDX-OR': 'Portland, OR',
-  'MIN-MN': 'Minneapolis, MN',
-  'STL-MO': 'St. Louis, MO',
-  'PHL-PA': 'Philadelphia, PA',
-  'BAL-MD': 'Baltimore, MD',
-  'CLT-NC': 'Charlotte, NC',
-  'MSP-MN': 'Minneapolis, MN',
-  'NO-LA':  'New Orleans, LA',
-  'OKC-OK': 'Oklahoma City, OK',
-  'TUL-OK': 'Tulsa, OK',
-  'ABQ-NM': 'Albuquerque, NM',
-  'TUC-AZ': 'Tucson, AZ',
-  'FRE-CA': 'Fresno, CA',
-  'SAC-CA': 'Sacramento, CA',
-  'BKR-CA': 'Bakersfield, CA',
-};
-
-
-const STATE_LABEL = {
-  TX: 'Texas', IL: 'Illinois', MI: 'Michigan', MO: 'Missouri',
-  CA: 'California', NV: 'Nevada', KY: 'Kentucky', TN: 'Tennessee',
-  AZ: 'Arizona', NC: 'North Carolina', IN: 'Indiana',
-};
-
-const getState = (regionId) => regionId?.split('-').pop() || 'Unknown';
-
 const AuctionsPage = () => {
   const [auctions, setAuctions] = useState([]);
   const [openStates, setOpenStates] = useState(new Set());
+  const [savedIds, setSavedIds] = useState(new Set());
   const navigate = useNavigate();
+  const { token } = useAuth();
 
   useEffect(() => {
     fetch(`${API}/auctions`)
@@ -72,6 +23,26 @@ const AuctionsPage = () => {
       .then(setAuctions)
       .catch(console.error);
   }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    authFetch(token, `${API}/saved-auctions`)
+      .then(r => r.json())
+      .then(data => setSavedIds(new Set(data.map(a => a.auction_id))))
+      .catch(console.error);
+  }, [token]);
+
+  const toggleSave = async (e, auctionId) => {
+    e.stopPropagation();
+    if (!token) { navigate('/login'); return; }
+    const isSaved = savedIds.has(auctionId);
+    await authFetch(token, `${API}/saved-auctions/${auctionId}`, { method: isSaved ? 'DELETE' : 'POST' });
+    setSavedIds(prev => {
+      const next = new Set(prev);
+      isSaved ? next.delete(auctionId) : next.add(auctionId);
+      return next;
+    });
+  };
 
   const active = auctions.filter(a => a.auction_status !== 'completed');
   const states = [...new Set(active.map(a => getState(a.region_id)))].sort();
@@ -147,6 +118,12 @@ const AuctionsPage = () => {
                             <div className="auction-card-divider" />
 
                             <div className="auction-card-info">
+                              {a.closes_at && (
+                                <div className="auction-card-info-row">
+                                  <span className="info-label">Starts</span>
+                                  <span>{new Date(a.closes_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                                </div>
+                              )}
                               <div className="auction-card-info-row">
                                 <span className="info-label">Vehicles</span>
                                 <span className={a.vehicles_listed > 0 ? 'vehicles-count' : 'vehicles-none'}>
@@ -169,6 +146,12 @@ const AuctionsPage = () => {
                               </a>
                               <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${a.auction_id}`); }}>
                                 View
+                              </button>
+                              <button
+                                className={`btn${savedIds.has(a.auction_id) ? ' saved' : ''}`}
+                                onClick={e => toggleSave(e, a.auction_id)}
+                              >
+                                {savedIds.has(a.auction_id) ? 'Saved' : 'Save'}
                               </button>
                             </div>
                           </div>
