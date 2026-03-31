@@ -284,15 +284,26 @@ input, button { font-family: var(--font); }
   .vehicle-table { font-size: 12px; }
   .vehicle-table td { padding: 7px 8px; }
 
-  /* Keep: Year(1), Make(2), Model(3), Bid(11), Avg Sale(15), Save(16) — hide everything else */
-  .vehicle-table th:nth-child(4),  .vehicle-table td:nth-child(4),
-  .vehicle-table th:nth-child(5),  .vehicle-table td:nth-child(5),
-  .vehicle-table th:nth-child(6),  .vehicle-table td:nth-child(6),
-  .vehicle-table th:nth-child(7),  .vehicle-table td:nth-child(7),
-  .vehicle-table th:nth-child(8),  .vehicle-table td:nth-child(8),
-  .vehicle-table th:nth-child(9),  .vehicle-table td:nth-child(9),
-  .vehicle-table th:nth-child(10), .vehicle-table td:nth-child(10),
-  .vehicle-table th:nth-child(12), .vehicle-table td:nth-child(12),
-  .vehicle-table th:nth-child(13), .vehicle-table td:nth-child(13),
-  .vehicle-table th:nth-child(14), .vehicle-table td:nth-child(14) { display: none; }
+  /* AuctionDetailPage: Year(1), Make(2), Model(3), Bid(11), Avg Sale(15), Save(16) */
+  .vehicle-table:not(.watchlist-table) th:nth-child(4),  .vehicle-table:not(.watchlist-table) td:nth-child(4),
+  .vehicle-table:not(.watchlist-table) th:nth-child(5),  .vehicle-table:not(.watchlist-table) td:nth-child(5),
+  .vehicle-table:not(.watchlist-table) th:nth-child(6),  .vehicle-table:not(.watchlist-table) td:nth-child(6),
+  .vehicle-table:not(.watchlist-table) th:nth-child(7),  .vehicle-table:not(.watchlist-table) td:nth-child(7),
+  .vehicle-table:not(.watchlist-table) th:nth-child(8),  .vehicle-table:not(.watchlist-table) td:nth-child(8),
+  .vehicle-table:not(.watchlist-table) th:nth-child(9),  .vehicle-table:not(.watchlist-table) td:nth-child(9),
+  .vehicle-table:not(.watchlist-table) th:nth-child(10), .vehicle-table:not(.watchlist-table) td:nth-child(10),
+  .vehicle-table:not(.watchlist-table) th:nth-child(12), .vehicle-table:not(.watchlist-table) td:nth-child(12),
+  .vehicle-table:not(.watchlist-table) th:nth-child(13), .vehicle-table:not(.watchlist-table) td:nth-child(13),
+  .vehicle-table:not(.watchlist-table) th:nth-child(14), .vehicle-table:not(.watchlist-table) td:nth-child(14) { display: none; }
+
+  /* WatchlistPage: Year(1), Make(2), Model(3), Bid(11), Avg Sale(14), Remove(15) */
+  .watchlist-table th:nth-child(4),  .watchlist-table td:nth-child(4),
+  .watchlist-table th:nth-child(5),  .watchlist-table td:nth-child(5),
+  .watchlist-table th:nth-child(6),  .watchlist-table td:nth-child(6),
+  .watchlist-table th:nth-child(7),  .watchlist-table td:nth-child(7),
+  .watchlist-table th:nth-child(8),  .watchlist-table td:nth-child(8),
+  .watchlist-table th:nth-child(9),  .watchlist-table td:nth-child(9),
+  .watchlist-table th:nth-child(10), .watchlist-table td:nth-child(10),
+  .watchlist-table th:nth-child(12), .watchlist-table td:nth-child(12),
+  .watchlist-table th:nth-child(13), .watchlist-table td:nth-child(13) { display: none; }
 }
