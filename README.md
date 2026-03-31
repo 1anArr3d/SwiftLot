@@ -1,48 +1,54 @@
 # SwiftLot
 
-A data pipeline and inventory browser for vehicle auctions on the Autura Marketplace. Discovers upcoming auctions, scrapes listed vehicles, and enriches each VIN with Texas state inspection odometer history — all on a automated schedule.
+A full-stack auction inventory platform for vehicle auctions on the Autura Marketplace. Reverse-engineers the marketplace API to discover active auctions, fetches vehicle listings, and enriches each VIN with Texas state inspection odometer history — all on an automated schedule.
+
+Live at [swift-lot.com](https://swift-lot.com)
 
 ## Features
 
 - Scheduled pipeline runs 3x daily (8am, 2pm, 10pm CT) — no manual intervention needed
-- Discovers active TX auctions and tracks vehicle count changes
-- Scrapes full vehicle details: VIN, year, make, model, color, condition, images
-- Auto-runs TX state odometer history lookup per VIN after each scrape
+- Discovers active auctions across 18 regions nationwide (400+ auctions)
+- Fetches full vehicle details per auction: VIN, year, make, model, color, condition, images
+- Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then batch-fetches odometer history for every VIN via authenticated HTTP
 - Skips redundant scrapes — only re-scrapes auctions when vehicle count changes
-- Watchlist — save vehicles across auctions, stored as independent snapshots
-- Saved auctions — bookmark auctions for quick access
 - Historical average sale prices per year/make/model to avoid overbidding
-- Filterable UI by year range, make, model, start status, engine, transmission
-- Firebase Auth — user accounts with saved auctions and watchlist
+- Firebase Auth — per-user watchlist (saved vehicles) and saved auctions
+- Filterable UI by year range, make, model, start status, engine, drivetrain
 
 ## Stack
 
-- **Backend** — Python, FastAPI, APScheduler, Playwright, SQLite
+- **Backend** — Python, FastAPI, APScheduler, Playwright, curl_cffi, SQLite
 - **Frontend** — React 19, Vite, React Router
+- **Auth** — Firebase Authentication
+- **Infra** — Hetzner (backend + nginx), Cloudflare (DNS + CDN)
 
 ## Project Structure
 
 ```
 backend/
-  main.py           # FastAPI app entry point
-  config.py         # Environment config (.env loader)
-  db.py             # SQLite connection and query helpers
-  models.py         # Pydantic response models
-  state.py             # Shared in-memory job status tracking
-  scheduler.py            # APScheduler — 3x daily pipeline
-  auction_scraper.py      # Async Playwright — scrapes vehicles per auction
-  auction_discovery.py    # Async Playwright — discovers active auctions by state
-  inspection_scraper.py   # Sync Playwright — TX state odometer history per VIN
-  routes.py            # All API route handlers
+  main.py               # FastAPI app entry point
+  config.py             # Environment config (.env loader)
+  db.py                 # SQLite connection and query helpers
+  models.py             # Pydantic response models
+  state.py              # Shared in-memory job status tracking
+  scheduler.py          # APScheduler — 3x daily pipeline
+  autura_api.py         # Autura Marketplace API client
+  auction_scraper.py    # Fetches vehicles per auction via API
+  auction_discovery.py  # Discovers active auctions across all regions via API
+  inspection_scraper.py # Playwright session + HTTP batch fetch for TX odometer history
+  routes.py             # All API route handlers
 
 frontend/
   src/
-    App.jsx         # Router and top nav
-    api.js          # API base URL
+    App.jsx                        # Router and top nav
+    api.js                         # API base URL (env-aware)
+    AuthContext.jsx                 # Firebase auth context
     pages/
-      AuctionsPage.jsx       # /auctions — auction card grid
-      AuctionDetailPage.jsx  # /auctions/:id — vehicle table with filters
-      WatchlistPage.jsx      # /watchlist — saved vehicles
+      AuctionsPage.jsx             # /auctions — auction card grid grouped by state
+      AuctionDetailPage.jsx        # /auctions/:id — vehicle table with filters
+      WatchlistPage.jsx            # /watchlist — saved vehicles
+      SavedAuctionsPage.jsx        # /saved — saved auctions
+      LoginPage.jsx                # /login
     components/
       FilterSection.jsx
       ChecklistFilter.jsx
@@ -95,27 +101,27 @@ App at `http://localhost:5173`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/auctions` | All discovered auctions |
+| GET | `/api/v1/auctions` | All active auctions |
 | GET | `/api/v1/auctions/:id` | Single auction |
 | GET | `/api/v1/auctions/:id/vehicles` | Vehicles for a specific auction |
-| GET | `/api/v1/watchlist` | Saved watchlist vehicles |
-| POST | `/api/v1/watchlist/:vin` | Add vehicle to watchlist |
-| DELETE | `/api/v1/watchlist/:vin` | Remove vehicle from watchlist |
-| POST | `/api/v1/scrape/:id` | Manually trigger auction scrape |
-| GET | `/api/v1/scrape/:id/status` | Scrape job status |
-| POST | `/api/v1/discovery/run` | Run auction discovery |
-| POST | `/api/v1/pipeline/run` | Run full pipeline (discovery + scrape + inspection) |
+| GET | `/api/v1/historical/stats` | Avg sale price by make/model/year |
+| GET | `/api/v1/watchlist` | Saved watchlist vehicles (auth required) |
+| POST | `/api/v1/watchlist/:vin` | Add vehicle to watchlist (auth required) |
+| DELETE | `/api/v1/watchlist/:vin` | Remove vehicle from watchlist (auth required) |
+| GET | `/api/v1/saved-auctions` | Saved auctions (auth required) |
+| POST | `/api/v1/saved-auctions/:id` | Save an auction (auth required) |
+| DELETE | `/api/v1/saved-auctions/:id` | Remove saved auction (auth required) |
+| POST | `/api/v1/pipeline/run` | Run full pipeline (admin only) |
+| POST | `/api/v1/discovery/run` | Run auction discovery (admin only) |
+| POST | `/api/v1/scrape/:id` | Manually trigger auction scrape (admin only) |
 
-## Manually trigger the pipeline
+## Deployment
 
-```powershell
-Invoke-WebRequest -Uri http://127.0.0.1:8000/api/v1/pipeline/run -Method POST
-```
+**Backend** runs on Hetzner at `/opt/swiftlot/`. The systemd service starts uvicorn with `xvfb-run --auto-servernum` so the inspection scraper's headed Playwright session works on a headless Linux server.
 
-Or use the Swagger UI at `http://127.0.0.1:8000/docs`.
+**Frontend** is built with `npm run build` and served via nginx from `/opt/swiftlot/frontend/dist`. To deploy frontend changes, push to `main` then pull and rebuild on the server.
 
 ## Notes
 
-- Inspection scraper uses `headless=False` to bypass Cloudflare Turnstile on mytxcar.org. On a headless Linux server, run with Xvfb: `Xvfb :99 -screen 0 1280x720x24 & export DISPLAY=:99`
-- SQLite is used for local development. PostgreSQL migration is planned for deployment.
-- Multi-user auth via Firebase Authentication. Users can save auctions and watchlist vehicles tied to their account.
+- Inspection scraper uses Playwright with `headless=False` to bypass Cloudflare Turnstile on mytxcar.org, then reuses the acquired session for all subsequent VIN lookups via HTTP
+- The systemd service uses `xvfb-run --auto-servernum` — no manual Xvfb setup needed for scheduled runs
