@@ -3,8 +3,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from db import query, get_db
-from state import scrape_status
-from routes import _run_scrape
 import auction_discovery as discovery
 import auction_scraper as scraper
 import inspection_scraper as inspection
@@ -68,23 +66,22 @@ def scheduled_discovery_and_scrape():
 
 
 def scheduled_live_refresh():
-    rows = query("""
-        SELECT auction_id, region_id FROM auctions
-        WHERE auction_status = 'active'
-          AND (last_scraped_at IS NULL OR last_scraped_at < datetime('now', '-15 minutes'))
-    """)
-    for row in rows:
-        auction_id = row["auction_id"]
-        if scrape_status.get(auction_id) != "running":
-            print(f"[live-refresh] Scraping {auction_id}")
-            _run_scrape(auction_id, row["region_id"])
+    print("[live-refresh] Refreshing all published vehicle bids...")
+    counts = scraper.scrape_all_published()
+    with get_db() as conn:
+        for auction_id, count in counts.items():
+            conn.execute(
+                "UPDATE auctions SET vehicles_listed = ?, last_scraped_at = datetime('now') WHERE auction_id = ?",
+                (count, auction_id)
+            )
+    print(f"[live-refresh] Done — {sum(counts.values())} vehicles updated")
 
 
 def create_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="America/Chicago")
     scheduler.add_job(
         scheduled_discovery_and_scrape,
-        CronTrigger(hour="8,14,22", timezone="America/Chicago")
+        CronTrigger(hour="8,12,16,20,0", timezone="America/Chicago")
     )
     scheduler.add_job(
         scheduled_live_refresh,
