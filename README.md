@@ -10,7 +10,10 @@ A data pipeline and inventory browser for vehicle auctions on the Autura Marketp
 - Auto-runs TX state odometer history lookup per VIN after each scrape
 - Skips redundant scrapes — only re-scrapes auctions when vehicle count changes
 - Watchlist — save vehicles across auctions, stored as independent snapshots
+- Saved auctions — bookmark auctions for quick access
+- Historical average sale prices per year/make/model to avoid overbidding
 - Filterable UI by year range, make, model, start status, engine, transmission
+- Firebase Auth — user accounts with saved auctions and watchlist
 
 ## Stack
 
@@ -115,4 +118,4 @@ Or use the Swagger UI at `http://127.0.0.1:8000/docs`.
 
 - Inspection scraper uses `headless=False` to bypass Cloudflare Turnstile on mytxcar.org. On a headless Linux server, run with Xvfb: `Xvfb :99 -screen 0 1280x720x24 & export DISPLAY=:99`
 - SQLite is used for local development. PostgreSQL migration is planned for deployment.
-- Single-user for now. Multi-user auth is planned for a future version.
+- Multi-user auth via Firebase Authentication. Users can save auctions and watchlist vehicles tied to their account.
