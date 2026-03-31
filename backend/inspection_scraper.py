@@ -37,7 +37,7 @@ class _LinkParser(HTMLParser):
         onclick = attrs.get("onclick", "")
         aria = attrs.get("aria-label", "")
         if "DoSelect" in onclick and aria:
-            m = re.search(r"DoSelect\('([^']*)',\s*'([^']*)',\s*'(\d+)'", onclick)
+            m = re.search(r"DoSelect\('([^']*)',\s*'([^']*)',\s*'(\d+)',\s*'([^']*)'", onclick)
             if m:
                 date = aria.split(" Click")[0].split(" ")[0]
                 self.links.append({
@@ -45,6 +45,7 @@ class _LinkParser(HTMLParser):
                     "search_type": m.group(1),
                     "vin": m.group(2),
                     "row_id": m.group(3),
+                    "tas_id": m.group(4),
                 })
 
 
@@ -161,7 +162,7 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
             "hidSearchType":  link["search_type"],
             "hidCode":        link["vin"],
             "hidSelectedRow": link["row_id"],
-            "hidTasId":       "",
+            "hidTasId":       link.get("tas_id", ""),
         }
         try:
             r = session.post(HISTORY_URL, data=detail_data, timeout=15)
