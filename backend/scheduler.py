@@ -48,7 +48,9 @@ def scheduled_discovery_and_scrape():
     vins = [row["vin"] for row in rows]
     if vins:
         print(f"[scheduler] Firing inspection for {len(vins)} TX VINs")
-        threading.Thread(target=inspection.run_inspection_batch, args=(vins,), daemon=True).start()
+        t = threading.Thread(target=inspection.run_inspection_batch, args=(vins,))
+        t.start()
+        t.join()
 
     # Harvest any completed auctions that haven't been captured yet
     unharvested = query("""
