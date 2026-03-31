@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
 import FilterSection from '../components/FilterSection';
@@ -6,6 +7,7 @@ import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
 
 const WatchlistPage = () => {
+  const navigate = useNavigate();
   const { token } = useAuth();
   const [vehicles, setVehicles] = useState([]);
   const [histStats, setHistStats] = useState({});
@@ -29,9 +31,11 @@ const WatchlistPage = () => {
 
   useEffect(() => {
     if (!vehicles.length) return;
+    const GENERIC = new Set(['other', 'unknown', 'misc', 'n/a', 'na']);
     const seen = new Set();
     const combos = vehicles.filter(v => {
       if (!v.make || !v.model || !v.year) return false;
+      if (GENERIC.has(v.make.toLowerCase()) || GENERIC.has(v.model.toLowerCase())) return false;
       const k = statsKey(v);
       if (seen.has(k)) return false;
       seen.add(k); return true;
@@ -118,8 +122,7 @@ const WatchlistPage = () => {
 
       <div className="main-content">
         <div className="auction-detail-header">
-          <span className="auction-detail-name">Watchlist</span>
-          <span className="vehicle-count-badge">{filtered.length} / {vehicles.length} saved</span>
+          <span className="auction-detail-name">My Garage</span>
         </div>
         <div className="controls">
           <input
@@ -189,6 +192,26 @@ const WatchlistPage = () => {
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
                                 <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}</span></div>
+                              )}
+                            </div>
+                            <div className="expanded-actions">
+                              {car.auction_id && (
+                                <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.auction_id}`); }}>
+                                  View Auction
+                                </button>
+                              )}
+                              {car.auction_id && car.region_id && (
+                                <a
+                                  className="btn"
+                                  href={car.item_id
+                                    ? `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}/vehicle/${car.item_id}`
+                                    : `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  Listing
+                                </a>
                               )}
                             </div>
                           </div>

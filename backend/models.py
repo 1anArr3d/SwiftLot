@@ -14,6 +14,7 @@ class Auction(BaseModel):
     minimum_bid: Optional[float] = None
     sales_tax: Optional[float] = None
     ended_at: Optional[str] = None
+    closes_at: Optional[str] = None
 
 
 class Vehicle(BaseModel):
@@ -57,6 +58,7 @@ class SavedAuction(BaseModel):
     seller_name: Optional[str] = None
     auction_status: Optional[str] = None
     vehicles_listed: Optional[int] = None
+    closes_at: Optional[str] = None
     saved_at: Optional[str] = None
 
 

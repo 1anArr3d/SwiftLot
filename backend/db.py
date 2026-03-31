@@ -2,7 +2,7 @@ import sqlite3
 from config import DB_PATH
 
 # Bump this when the schema changes to trigger a migration
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def get_db() -> sqlite3.Connection:
@@ -41,6 +41,9 @@ def init_db():
                     saved_at    TEXT,
                     PRIMARY KEY (auction_id, user_id)
                 )''')
+            if current == 6:
+                # v6 → v7: add closes_at to auctions for sort
+                conn.execute("ALTER TABLE auctions ADD COLUMN closes_at TEXT")
 
         conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
             auction_id         TEXT PRIMARY KEY,
@@ -55,6 +58,7 @@ def init_db():
             minimum_bid        REAL,
             sales_tax          REAL,
             ended_at           TEXT,
+            closes_at          TEXT,
             harvested          INTEGER DEFAULT 0
         )''')
 
