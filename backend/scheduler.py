@@ -70,7 +70,7 @@ def scheduled_discovery_and_scrape():
 def scheduled_live_refresh():
     rows = query("""
         SELECT auction_id, region_id FROM auctions
-        WHERE auction_status = 'live-auction'
+        WHERE auction_status = 'active'
           AND (last_scraped_at IS NULL OR last_scraped_at < datetime('now', '-15 minutes'))
     """)
     for row in rows:
