@@ -2,7 +2,7 @@ import sqlite3
 from config import DB_PATH
 
 # Bump this when the schema changes to trigger a migration
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def get_db() -> sqlite3.Connection:
@@ -44,6 +44,9 @@ def init_db():
             if current == 6:
                 # v6 → v7: add closes_at to auctions for sort
                 conn.execute("ALTER TABLE auctions ADD COLUMN closes_at TEXT")
+            if current == 7:
+                # v7 → v8: rename watchlist to garage
+                conn.execute("ALTER TABLE watchlist RENAME TO garage")
 
         conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
             auction_id         TEXT PRIMARY KEY,
@@ -100,7 +103,7 @@ def init_db():
             mileage        INTEGER
         )''')
 
-        conn.execute('''CREATE TABLE IF NOT EXISTS watchlist (
+        conn.execute('''CREATE TABLE IF NOT EXISTS garage (
             vin                TEXT,
             user_id            TEXT,
             year               INTEGER,

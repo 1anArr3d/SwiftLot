@@ -32,7 +32,7 @@ const AuctionDetailPage = () => {
       .then(setVehicles)
       .catch(console.error);
     if (token) {
-      authFetch(token, `${API}/watchlist`)
+      authFetch(token, `${API}/garage`)
         .then(r => r.json())
         .then(data => setWatchlistVins(new Set(data.map(v => v.vin))))
         .catch(console.error);
@@ -44,7 +44,7 @@ const AuctionDetailPage = () => {
     if (!token) { navigate('/login', { state: { from: window.location.pathname } }); return; }
     const inList = watchlistVins.has(vin);
     try {
-      await authFetch(token, `${API}/watchlist/${vin}`, { method: inList ? 'DELETE' : 'POST' });
+      await authFetch(token, `${API}/garage/${vin}`, { method: inList ? 'DELETE' : 'POST' });
       setWatchlistVins(prev => {
         const next = new Set(prev);
         inList ? next.delete(vin) : next.add(vin);
@@ -100,8 +100,9 @@ const AuctionDetailPage = () => {
       if (sel.size > 0 && !sel.has(car[key])) return false;
     }
     if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      if (!Object.values(car).some(v => String(v || '').toLowerCase().includes(term))) return false;
+      const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+      const haystack = Object.values(car).map(v => String(v || '').toLowerCase()).join(' ');
+      if (!terms.every(t => haystack.includes(t))) return false;
     }
     return true;
   });

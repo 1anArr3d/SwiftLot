@@ -48,7 +48,7 @@ class Vehicle(BaseModel):
     last_recorded_odo: Optional[str] = None
 
 
-class WatchlistVehicle(Vehicle):
+class GarageVehicle(Vehicle):
     liked_at: Optional[str] = None
 
 

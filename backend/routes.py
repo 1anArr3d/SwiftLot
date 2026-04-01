@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from auth import get_current_user, require_admin
 from db import query, get_db
-from models import Auction, Vehicle, OdometerEntry, WatchlistVehicle, SavedAuction, JobStatus
+from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction, JobStatus
 from config import DB_PATH
 from state import scrape_status, discovery_status, inspection_status
 import auction_scraper as scraper
@@ -121,22 +121,48 @@ def get_odometer_history(vin: str):
     return [dict(row) for row in rows]
 
 
-# ── Watchlist ─────────────────────────────────────────────────────────────────
+# ── Garage ────────────────────────────────────────────────────────────────────
 
-@router.get("/watchlist", response_model=list[WatchlistVehicle], tags=["watchlist"])
-def get_watchlist(user_id: str = Depends(get_current_user)):
-    rows = query("SELECT * FROM watchlist WHERE user_id = ? ORDER BY liked_at DESC", (user_id,))
+@router.get("/garage", response_model=list[GarageVehicle], tags=["garage"])
+def get_garage(user_id: str = Depends(get_current_user)):
+    rows = query("""
+        SELECT v.vin, v.year, v.make, v.model, v.body_type, v.color, v.key_status,
+               v.catalytic_converter, v.start_status, v.engine_type, v.drivetrain,
+               v.fuel_type, v.num_cylinders, v.documentation_type, v.auction_id,
+               v.region_id, v.seller_id, v.item_id, v.item_key, v.current_bid,
+               v.bid_expiration, v.reserve_price, v.fee_price, v.seller_notes,
+               v.images, v.images_count, v.published_at, v.last_recorded_odo,
+               w.liked_at
+        FROM garage w
+        JOIN vehicles v ON v.vin = w.vin
+        WHERE w.user_id = ?
+
+        UNION ALL
+
+        SELECT w.vin, w.year, w.make, w.model, w.body_type, w.color, w.key_status,
+               w.catalytic_converter, w.start_status, w.engine_type, w.drivetrain,
+               w.fuel_type, w.num_cylinders, w.documentation_type, w.auction_id,
+               w.region_id, w.seller_id, w.item_id, w.item_key, w.current_bid,
+               w.bid_expiration, w.reserve_price, w.fee_price, NULL,
+               w.images, w.images_count, NULL, w.last_recorded_odo,
+               w.liked_at
+        FROM garage w
+        WHERE w.user_id = ?
+          AND NOT EXISTS (SELECT 1 FROM vehicles v WHERE v.vin = w.vin)
+
+        ORDER BY liked_at DESC
+    """, (user_id, user_id))
     return [dict(row) for row in rows]
 
 
-@router.post("/watchlist/{vin}", tags=["watchlist"])
-def add_to_watchlist(vin: str, user_id: str = Depends(get_current_user)):
+@router.post("/garage/{vin}", tags=["garage"])
+def add_to_garage(vin: str, user_id: str = Depends(get_current_user)):
     vehicle = query("SELECT * FROM vehicles WHERE vin = ?", (vin,), one=True)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     with get_db() as conn:
         conn.execute('''
-            INSERT OR IGNORE INTO watchlist (
+            INSERT OR IGNORE INTO garage (
                 vin, user_id, year, make, model, body_type, color, key_status, catalytic_converter,
                 start_status, engine_type, drivetrain, fuel_type, num_cylinders,
                 documentation_type, auction_id, region_id, seller_id, item_id, item_key,
@@ -163,10 +189,10 @@ def add_to_watchlist(vin: str, user_id: str = Depends(get_current_user)):
     return {"status": "added", "vin": vin}
 
 
-@router.delete("/watchlist/{vin}", tags=["watchlist"])
-def remove_from_watchlist(vin: str, user_id: str = Depends(get_current_user)):
+@router.delete("/garage/{vin}", tags=["garage"])
+def remove_from_garage(vin: str, user_id: str = Depends(get_current_user)):
     with get_db() as conn:
-        conn.execute("DELETE FROM watchlist WHERE vin = ? AND user_id = ?", (vin, user_id))
+        conn.execute("DELETE FROM garage WHERE vin = ? AND user_id = ?", (vin, user_id))
     return {"status": "removed", "vin": vin}
 
 

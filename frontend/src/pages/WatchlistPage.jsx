@@ -21,7 +21,7 @@ const WatchlistPage = () => {
 
   useEffect(() => {
     if (!token) return;
-    authFetch(token, `${API}/watchlist`)
+    authFetch(token, `${API}/garage`)
       .then(r => r.json())
       .then(setVehicles)
       .catch(console.error);
@@ -54,7 +54,7 @@ const WatchlistPage = () => {
 
   const handleRemove = async (e, vin) => {
     e.stopPropagation();
-    await authFetch(token, `${API}/watchlist/${vin}`, { method: 'DELETE' });
+    await authFetch(token, `${API}/garage/${vin}`, { method: 'DELETE' });
     setVehicles(prev => prev.filter(v => v.vin !== vin));
   };
 
@@ -78,8 +78,9 @@ const WatchlistPage = () => {
       if (sel.size > 0 && !sel.has(car[key])) return false;
     }
     if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      if (!Object.values(car).some(v => String(v || '').toLowerCase().includes(term))) return false;
+      const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+      const haystack = Object.values(car).map(v => String(v || '').toLowerCase()).join(' ');
+      if (!terms.every(t => haystack.includes(t))) return false;
     }
     return true;
   });
