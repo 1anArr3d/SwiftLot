@@ -104,6 +104,10 @@ const AuctionsPage = () => {
                           >
                             <div className="auction-card-top">
                               <div className="auction-card-seller">{a.seller_name || a.auction_id}</div>
+                              {a.closes_at && new Date(a.closes_at) <= new Date()
+                                ? <span className="status-badge status-live-auction">Live</span>
+                                : <span className="status-badge status-pre-auction">Open</span>
+                              }
                             </div>
 
                             <div className="auction-card-divider" />
