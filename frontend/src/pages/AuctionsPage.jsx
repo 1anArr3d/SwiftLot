@@ -135,9 +135,6 @@ const AuctionsPage = () => {
                               >
                                 Listing
                               </a>
-                              <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${a.auction_id}`); }}>
-                                View
-                              </button>
                               <button
                                 className={`btn${savedIds.has(a.auction_id) ? ' saved' : ''}`}
                                 onClick={e => toggleSave(e, a.auction_id)}

@@ -154,9 +154,6 @@ const SavedAuctionsPage = () => {
                   >
                     Listing
                   </a>
-                  <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${a.auction_id}`); }}>
-                    View
-                  </button>
                   <button className="btn" onClick={e => handleRemove(e, a.auction_id)}>
                     Remove
                   </button>
