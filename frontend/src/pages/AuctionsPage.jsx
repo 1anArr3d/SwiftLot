@@ -99,11 +99,16 @@ const AuctionsPage = () => {
                         {regionAuctions.map(a => (
                           <div
                             key={a.auction_id}
-                            className={`auction-card${a.vehicles_listed > 0 ? ' has-vehicles' : ''}`}
+                            className={`auction-card${a.vehicles_listed > 0 ? ' has-vehicles' : ''}${a.auction_status === 'live' || a.auction_status === 'paused' ? ' is-live' : ''}`}
                             onClick={() => navigate(`/auctions/${a.auction_id}`)}
                           >
                             <div className="auction-card-top">
                               <div className="auction-card-seller">{a.seller_name || a.auction_id}</div>
+                              {(a.auction_status === 'live' || a.auction_status === 'paused') && (
+                                <span className={`badge-live${a.auction_status === 'paused' ? ' badge-paused' : ''}`}>
+                                  {a.auction_status === 'paused' ? 'PAUSED' : 'LIVE'}
+                                </span>
+                              )}
                             </div>
 
                             <div className="auction-card-divider" />

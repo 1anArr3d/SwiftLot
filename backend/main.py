@@ -12,6 +12,7 @@ from scheduler import create_scheduler
 import historical_harvester as harvester
 
 from routes import router
+import rtdb_listener as listener
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
@@ -25,6 +26,9 @@ async def lifespan(app: FastAPI):
     scheduler = create_scheduler()
     scheduler.start()
     print("[scheduler] Started — jobs at 8am, 2pm, 10pm CT")
+
+    # Start RTDB listener — subscribe to all active auctions
+    threading.Thread(target=listener.sync_with_db, daemon=True).start()
 
     yield
 
