@@ -11,6 +11,7 @@ const AuctionDetailPage = () => {
   const navigate = useNavigate();
   const { token } = useAuth();
   const [auction, setAuction] = useState(null);
+  const [auctionEnded, setAuctionEnded] = useState(false);
   const [vehicles, setVehicles] = useState([]);
   const [watchlistVins, setWatchlistVins] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
@@ -38,6 +39,29 @@ const AuctionDetailPage = () => {
         .catch(console.error);
     }
   }, [id, token]);
+
+  // Live bid updates via SSE
+  useEffect(() => {
+    const source = new EventSource(`${API}/stream/auction/${id}`);
+    source.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'bid') {
+        setVehicles(prev => prev.map(v =>
+          v.item_key === msg.item_key
+            ? { ...v, current_bid: msg.amount, bid_expiration: msg.expires }
+            : v
+        ));
+      } else if (msg.type === 'status') {
+        setAuction(prev => prev ? { ...prev, auction_status: msg.auction_status } : prev);
+      } else if (msg.type === 'ended') {
+        setAuction(prev => prev ? { ...prev, auction_status: 'completed' } : prev);
+        setAuctionEnded(true);
+        source.close();
+      }
+    };
+    source.onerror = () => source.close();
+    return () => source.close();
+  }, [id]);
 
   const toggleWatchlist = async (e, vin) => {
     e.stopPropagation();
@@ -166,6 +190,9 @@ const AuctionDetailPage = () => {
             )}
           </div>
         </div>
+        {auctionEnded && (
+          <div className="auction-ended-banner">This auction has ended.</div>
+        )}
         <div className="controls">
           <input
             placeholder="Search..."

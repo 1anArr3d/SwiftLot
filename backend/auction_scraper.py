@@ -207,10 +207,11 @@ def scrape_data(auction_id: str, region_id: str) -> int:
     return saved
 
 
-def scrape_all_published() -> dict[str, int]:
+def scrape_all_published(skip_auction_ids: set = None) -> dict[str, int]:
     """
     Fetch all published vehicles nationwide in one API call.
     Returns {auction_id: vehicle_count} for updating auctions table.
+    skip_auction_ids: auctions already covered by RTDB listener (skip re-scraping their bids).
     """
     print("[scraper] Fetching all published vehicles...")
     result = autura_api._post(autura_api._SEARCH_HTTP, "searchEngine-getPublishedVehiclesForFilters", {"limit": 2000})
@@ -221,18 +222,24 @@ def scrape_all_published() -> dict[str, int]:
     if not valid:
         return {}
 
+    skip = skip_auction_ids or set()
+    to_save = [item for item in valid if item.get("auctionId") not in skip]
+    skipped = len(valid) - len(to_save)
+    if skipped:
+        print(f"[scraper] Skipping {skipped} vehicles in listener-covered auctions")
+
     # Fetch full image sets in parallel
     image_map: dict[str, list[str]] = {}
     with ThreadPoolExecutor(max_workers=10) as pool:
         futures = {pool.submit(autura_api.get_item_images, item["key"]): item["key"]
-                   for item in valid if item.get("key")}
+                   for item in to_save if item.get("key")}
         for future in as_completed(futures):
             key = futures[future]
             image_map[key] = future.result()
 
     counts: dict[str, int] = {}
     with sqlite3.connect(DB_PATH) as conn:
-        for item in valid:
+        for item in to_save:
             auction_id = item.get("auctionId", "")
             region_id  = item.get("regionId", "")
             item_key   = item.get("key")
@@ -242,5 +249,11 @@ def scrape_all_published() -> dict[str, int]:
             counts[auction_id] = counts.get(auction_id, 0) + 1
         conn.commit()
 
-    print(f"[scraper] Saved {len(valid)} vehicles across {len(counts)} auctions")
+    # Still count skipped auctions so vehicles_listed stays accurate
+    for item in valid:
+        aid = item.get("auctionId", "")
+        if aid in skip:
+            counts[aid] = counts.get(aid, 0) + 1
+
+    print(f"[scraper] Saved {len(to_save)} vehicles across {len(counts)} auctions")
     return counts

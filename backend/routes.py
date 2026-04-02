@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from auth import get_current_user, require_admin
 from db import query, get_db
 from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction, JobStatus
@@ -9,6 +10,8 @@ import inspection_scraper as inspection
 import auction_discovery as discovery
 import sqlite3
 import threading
+import asyncio
+import json
 
 router = APIRouter(prefix="/api/v1")
 
@@ -232,6 +235,57 @@ def unsave_auction(auction_id: str, user_id: str = Depends(get_current_user)):
             (auction_id, user_id)
         )
     return {"status": "removed", "auction_id": auction_id}
+
+
+# ── SSE Stream ────────────────────────────────────────────────────────────────
+
+@router.get("/stream/auction/{auction_id}", tags=["stream"])
+async def stream_auction_bids(auction_id: str):
+    """
+    Server-sent events stream for live bid updates on an auction.
+    Emits: {"type":"bid","item_key":..,"amount":..,"expires":..}
+    Emits: {"type":"status","auction_status":..}  when status changes
+    Emits: {"type":"ended"}  when auction completes
+    No auth required — bids are public information.
+    """
+    async def event_gen():
+        last_bids: dict = {}
+        last_status: str | None = None
+        while True:
+            rows = query(
+                "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = ?",
+                (auction_id,)
+            )
+            auction = query(
+                "SELECT auction_status FROM auctions WHERE auction_id = ?",
+                (auction_id,), one=True
+            )
+            current_status = auction["auction_status"] if auction else None
+
+            # Emit bid changes
+            for r in rows:
+                key = r["item_key"]
+                if key and r["current_bid"] != last_bids.get(key):
+                    yield f"data: {json.dumps({'type': 'bid', 'item_key': key, 'amount': r['current_bid'], 'expires': r['bid_expiration']})}\n\n"
+                    last_bids[key] = r["current_bid"]
+
+            # Emit status change
+            if current_status and current_status != last_status:
+                yield f"data: {json.dumps({'type': 'status', 'auction_status': current_status})}\n\n"
+                last_status = current_status
+
+            # Emit ended and stop
+            if current_status in ("completed",) and not rows:
+                yield f"data: {json.dumps({'type': 'ended'})}\n\n"
+                break
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
