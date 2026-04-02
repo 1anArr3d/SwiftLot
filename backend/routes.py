@@ -8,12 +8,20 @@ from state import scrape_status, discovery_status, inspection_status
 import auction_scraper as scraper
 import inspection_scraper as inspection
 import auction_discovery as discovery
+import rtdb_listener as listener
 import sqlite3
 import threading
 import asyncio
 import json
 
 router = APIRouter(prefix="/api/v1")
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+
+@router.get("/health", tags=["system"])
+def get_health():
+    return listener.health()
 
 
 # ── Auctions ──────────────────────────────────────────────────────────────────
@@ -275,7 +283,7 @@ async def stream_auction_bids(auction_id: str):
                 last_status = current_status
 
             # Emit ended and stop
-            if current_status in ("completed",) and not rows:
+            if current_status == "completed" and not rows:
                 yield f"data: {json.dumps({'type': 'ended'})}\n\n"
                 break
 
@@ -334,7 +342,7 @@ def _run_discovery(key: str):
         discovery_status[key] = "failed"
 
 
-def _run_pipeline(state: str):
+def _run_pipeline():
     from scheduler import scheduled_discovery_and_scrape
     scheduled_discovery_and_scrape()
 
@@ -390,5 +398,5 @@ def get_discovery_status(user_id: str = Depends(require_admin)):
 
 @router.post("/pipeline/run", tags=["jobs"])
 def run_full_pipeline(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
-    background_tasks.add_task(_run_pipeline, None)
+    background_tasks.add_task(_run_pipeline)
     return {"status": "started"}

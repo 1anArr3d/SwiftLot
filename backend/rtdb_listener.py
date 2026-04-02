@@ -25,13 +25,16 @@ _lock = threading.Lock()
 
 def handle_auction_completed(auction_id: str, region_id: str):
     """
-    Run the end-of-auction snapshot: archive vehicles to garage for users who
-    saved the auction, update final bids, then remove from vehicles table.
-    Fires harvest immediately. Called by both listener and scheduler.
+    Run the end-of-auction snapshot: harvest from vehicles table, sync final bids
+    to garage, then remove vehicles. Called by both listener and scheduler.
     """
     print(f"[listener] {auction_id} ended — running snapshot")
+
+    # Harvest first — reads from vehicles table before they are deleted
+    harvester.harvest_auction(region_id, auction_id)
+
     with get_db() as conn:
-        # Update final bid for vehicles already in any user's garage
+        # Sync final bid into garage snapshots before vehicles are deleted
         conn.execute("""
             UPDATE garage
             SET current_bid = (
@@ -42,38 +45,8 @@ def handle_auction_completed(auction_id: str, region_id: str):
             )
         """, (auction_id,))
 
-        # Copy vehicles into garage for users who saved this auction
-        rows = conn.execute("""
-            SELECT sa.user_id,
-                   v.vin, v.year, v.make, v.model, v.body_type, v.color, v.key_status,
-                   v.catalytic_converter, v.start_status, v.engine_type, v.drivetrain,
-                   v.fuel_type, v.num_cylinders, v.documentation_type, v.auction_id,
-                   v.region_id, v.seller_id, v.item_id, v.item_key, v.current_bid,
-                   v.bid_expiration, v.reserve_price, v.fee_price, v.images,
-                   v.images_count, v.last_recorded_odo
-            FROM saved_auctions sa
-            JOIN vehicles v ON v.auction_id = sa.auction_id
-            WHERE sa.auction_id = ?
-        """, (auction_id,)).fetchall()
-
-        for row in rows:
-            conn.execute('''
-                INSERT OR IGNORE INTO garage (
-                    vin, user_id, year, make, model, body_type, color, key_status,
-                    catalytic_converter, start_status, engine_type, drivetrain, fuel_type,
-                    num_cylinders, documentation_type, auction_id, region_id, seller_id,
-                    item_id, item_key, current_bid, bid_expiration, reserve_price, fee_price,
-                    images, images_count, last_recorded_odo, liked_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            ''', (
-                row['vin'], row['user_id'], row['year'], row['make'], row['model'],
-                row['body_type'], row['color'], row['key_status'], row['catalytic_converter'],
-                row['start_status'], row['engine_type'], row['drivetrain'], row['fuel_type'],
-                row['num_cylinders'], row['documentation_type'], row['auction_id'], row['region_id'],
-                row['seller_id'], row['item_id'], row['item_key'], row['current_bid'],
-                row['bid_expiration'], row['reserve_price'], row['fee_price'],
-                row['images'], row['images_count'], row['last_recorded_odo']
-            ))
+        # Clean up saved auctions watchlist — auction is over
+        conn.execute("DELETE FROM saved_auctions WHERE auction_id = ?", (auction_id,))
 
         # Mark completed and delete vehicles
         conn.execute(
@@ -81,13 +54,6 @@ def handle_auction_completed(auction_id: str, region_id: str):
             (auction_id,)
         )
         conn.execute("DELETE FROM vehicles WHERE auction_id = ?", (auction_id,))
-
-    # Harvest in background
-    threading.Thread(
-        target=harvester.harvest_auction,
-        args=(region_id, auction_id),
-        daemon=True
-    ).start()
 
 
 # ── Per-auction SSE stream handlers ────────────────────────────────────────────
@@ -103,7 +69,7 @@ def _stream_auction_node(region_id: str, auction_id: str, stop: threading.Event)
                 params={"auth": token},
                 headers={"Accept": "text/event-stream"},
                 stream=True,
-                timeout=90,
+                timeout=300,
             ) as resp:
                 for raw in resp.iter_lines():
                     if stop.is_set():
@@ -125,18 +91,14 @@ def _stream_auction_node(region_id: str, auction_id: str, stop: threading.Event)
                         continue
 
                     auction_data = data.get("data") or data
+                    if not isinstance(auction_data, dict):
+                        continue
 
                     ended = auction_data.get("ended", False)
                     start_item = auction_data.get("startItem")
                     paused = auction_data.get("paused")
 
                     if ended:
-                        # Update DB status and fire snapshot
-                        with get_db() as conn:
-                            conn.execute(
-                                "UPDATE auctions SET auction_status = 'completed' WHERE auction_id = ?",
-                                (auction_id,)
-                            )
                         handle_auction_completed(auction_id, region_id)
                         unsubscribe(auction_id)
                         return
@@ -173,7 +135,7 @@ def _stream_results_node(region_id: str, auction_id: str, stop: threading.Event)
                 params={"auth": token},
                 headers={"Accept": "text/event-stream"},
                 stream=True,
-                timeout=90,
+                timeout=300,
             ) as resp:
                 for raw in resp.iter_lines():
                     if stop.is_set():
@@ -191,29 +153,36 @@ def _stream_results_node(region_id: str, auction_id: str, stop: threading.Event)
                     except json.JSONDecodeError:
                         continue
 
-                    # data may be {"path": "/", "data": {itemKey: {amount, expiration, ...}}}
-                    # or directly the results dict on initial "put"
-                    results = data.get("data") if isinstance(data, dict) else None
-                    if not isinstance(results, dict):
+                    if not isinstance(data, dict):
                         continue
 
-                    # Results keyed by itemKey
-                    for item_key, result in results.items():
-                        if not isinstance(result, dict):
-                            continue
-                        amount = result.get("amount")
-                        expiration = result.get("expiration")
-                        if amount is None:
-                            continue
+                    path = data.get("path", "/")
+                    inner = data.get("data")
+                    updates = []  # list of (item_key, amount, expiration)
+
+                    if path == "/" and isinstance(inner, dict):
+                        # put/patch at root: {itemKey: {amount, expiration, ...}}
+                        for item_key, result in inner.items():
+                            if not isinstance(result, dict):
+                                continue
+                            amount = result.get("amount")
+                            if amount is not None:
+                                updates.append((item_key, amount, result.get("expiration")))
+                    elif path.count("/") == 1 and isinstance(inner, dict):
+                        # patch at item level: path="/itemKey", data={amount, expiration, ...}
+                        item_key = path.lstrip("/")
+                        amount = inner.get("amount")
+                        if item_key and amount is not None:
+                            updates.append((item_key, amount, inner.get("expiration")))
+
+                    if updates:
+                        print(f"[listener] {auction_id} bid update — {len(updates)} item(s): {[(k, a) for k, a, _ in updates]}")
                         with get_db() as conn:
-                            conn.execute(
-                                "UPDATE vehicles SET current_bid = ?, bid_expiration = ? WHERE item_key = ?",
-                                (amount, expiration, item_key)
-                            )
-                            conn.execute(
-                                "UPDATE garage SET current_bid = ? WHERE item_key = ?",
-                                (amount, item_key)
-                            )
+                            for item_key, amount, expiration in updates:
+                                conn.execute(
+                                    "UPDATE vehicles SET current_bid = ?, bid_expiration = ? WHERE item_key = ?",
+                                    (amount, expiration, item_key)
+                                )
 
         except Exception as e:
             if stop.is_set():
@@ -289,3 +258,65 @@ def sync_with_db():
             unsubscribe(auction_id)
 
     print(f"[listener] sync complete — {len(active_auction_ids())} active subscriptions")
+
+
+def health() -> dict:
+    """Return listener health snapshot for the /health endpoint."""
+    with _lock:
+        subs = list(_subscriptions.items())
+    dead = []
+    for auction_id, sub in subs:
+        if not sub["auction"].is_alive() or not sub["results"].is_alive():
+            dead.append(auction_id)
+    return {
+        "subscriptions": len(subs),
+        "dead_threads": dead,
+        "healthy": len(dead) == 0,
+    }
+
+
+def _watchdog(interval: int = 30):
+    """Restart dead SSE threads for any active subscription."""
+    while True:
+        time.sleep(interval)
+        with _lock:
+            subs = list(_subscriptions.items())
+        for auction_id, sub in subs:
+            stop = sub["stop"]
+            if stop.is_set():
+                continue
+            region_id = sub["region_id"]
+            restarted = []
+            if not sub["auction"].is_alive():
+                t = threading.Thread(
+                    target=_stream_auction_node,
+                    args=(region_id, auction_id, stop),
+                    daemon=True,
+                    name=f"rtdb-auction-{auction_id}",
+                )
+                t.start()
+                with _lock:
+                    if auction_id in _subscriptions:
+                        _subscriptions[auction_id]["auction"] = t
+                restarted.append("auction")
+            if not sub["results"].is_alive():
+                t = threading.Thread(
+                    target=_stream_results_node,
+                    args=(region_id, auction_id, stop),
+                    daemon=True,
+                    name=f"rtdb-results-{auction_id}",
+                )
+                t.start()
+                with _lock:
+                    if auction_id in _subscriptions:
+                        _subscriptions[auction_id]["results"] = t
+                restarted.append("results")
+            if restarted:
+                print(f"[watchdog] restarted {restarted} thread(s) for {auction_id}")
+
+
+def start_watchdog(interval: int = 30):
+    """Start the watchdog daemon thread. Call once on app startup."""
+    t = threading.Thread(target=_watchdog, args=(interval,), daemon=True, name="rtdb-watchdog")
+    t.start()
+    print(f"[watchdog] started — checking every {interval}s")

@@ -8,7 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
-from scheduler import create_scheduler
+from scheduler import create_scheduler, scheduled_discovery_and_scrape
 import historical_harvester as harvester
 
 from routes import router
@@ -23,12 +23,15 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=_seed_historical, daemon=True).start()
 
+    # Subscribe to auctions already in DB immediately
+    threading.Thread(target=listener.sync_with_db, daemon=True).start()
+    listener.start_watchdog(interval=30)
+    # Run pipeline in background so DB is fresh after any restart
+    threading.Thread(target=scheduled_discovery_and_scrape, daemon=True).start()
+
     scheduler = create_scheduler()
     scheduler.start()
-    print("[scheduler] Started — jobs at 8am, 2pm, 10pm CT")
-
-    # Start RTDB listener — subscribe to all active auctions
-    threading.Thread(target=listener.sync_with_db, daemon=True).start()
+    print("[scheduler] Started — jobs at 8am, 12pm, 4pm, 8pm, 12am CT")
 
     yield
 
