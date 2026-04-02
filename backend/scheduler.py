@@ -1,7 +1,5 @@
-import threading
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 from db import query, get_db
 import auction_discovery as discovery
 import auction_scraper as scraper
@@ -52,37 +50,13 @@ def scheduled_discovery_and_scrape():
     vins = [row["vin"] for row in rows]
     if vins:
         print(f"[scheduler] Firing inspection for {len(vins)} TX VINs")
-        t = threading.Thread(target=inspection.run_inspection_batch, args=(vins,))
-        t.start()
-        t.join()
+        inspection.run_inspection_batch(vins)
 
-    # Harvest any completed auctions that haven't been captured yet
-    unharvested = query("""
-        SELECT auction_id, region_id FROM auctions
-        WHERE auction_status = 'completed' AND (harvested IS NULL OR harvested = 0)
-    """)
-    for row in unharvested:
-        threading.Thread(
-            target=harvester.harvest_auction,
-            args=(row["region_id"], row["auction_id"]),
-            daemon=True
-        ).start()
+    # Recover any completed auctions missed by the listener (e.g. server was down)
+    # harvest_api() skips auctions already marked harvested=1
+    harvester.harvest_api()
 
     print("[scheduler] ✓ Pipeline complete.")
-
-
-def scheduled_live_refresh():
-    # Skip auctions already covered by the RTDB listener (they get real-time updates)
-    covered = listener.active_auction_ids()
-    print(f"[live-refresh] Refreshing bids (listener covers {len(covered)} auctions)...")
-    counts = scraper.scrape_all_published(skip_auction_ids=covered)
-    with get_db() as conn:
-        for auction_id, count in counts.items():
-            conn.execute(
-                "UPDATE auctions SET vehicles_listed = ?, last_scraped_at = datetime('now') WHERE auction_id = ?",
-                (count, auction_id)
-            )
-    print(f"[live-refresh] Done — {sum(counts.values())} vehicles updated")
 
 
 def create_scheduler() -> BackgroundScheduler:
@@ -90,9 +64,5 @@ def create_scheduler() -> BackgroundScheduler:
     scheduler.add_job(
         scheduled_discovery_and_scrape,
         CronTrigger(hour="8,12,16,20,0", timezone="America/Chicago")
-    )
-    scheduler.add_job(
-        scheduled_live_refresh,
-        IntervalTrigger(minutes=15)
     )
     return scheduler

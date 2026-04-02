@@ -109,15 +109,31 @@ def _harvest_one(region_id: str, auction_id: str) -> list[dict]:
 
 
 def harvest_auction(region_id: str, auction_id: str):
-    """Capture a single just-completed auction and mark it harvested."""
-    rows = _harvest_one(region_id, auction_id)
+    """
+    Capture a just-completed auction directly from the vehicles table (fast path).
+    Must be called before vehicles are deleted from the DB.
+    Only marks harvested=1 if rows were actually inserted.
+    """
     with sqlite3.connect(DB_PATH) as conn:
-        inserted = _insert_batch(conn, rows, source="api")
-        conn.execute(
-            "UPDATE auctions SET harvested = 1 WHERE auction_id = ?", (auction_id,)
-        )
+        vehicle_rows = conn.execute("""
+            SELECT vin, year, make, model, color, key_status,
+                   region_id, auction_id, current_bid, fee_price, bid_expiration
+            FROM vehicles WHERE auction_id = ?
+        """, (auction_id,)).fetchall()
+        inserted = 0
+        for r in vehicle_rows:
+            conn.execute("""
+                INSERT OR IGNORE INTO historical_sales
+                    (vin, year, make, model, color, key_status, region_id, auction_id,
+                     final_sale, fees_total, sold_at, source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'listener')
+            """, r)
+            if conn.execute("SELECT changes()").fetchone()[0]:
+                inserted += 1
+        if inserted > 0:
+            conn.execute("UPDATE auctions SET harvested = 1 WHERE auction_id = ?", (auction_id,))
         conn.commit()
-    print(f"[historical] {auction_id}: {inserted} records captured")
+    print(f"[historical] {auction_id}: {inserted}/{len(vehicle_rows)} records captured")
 
 
 def harvest_api():
@@ -158,12 +174,16 @@ def harvest_api():
     all_rows = []
     harvested_auction_ids = []
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(_process, r, a): (r, a) for r, a in to_harvest}
         for future in as_completed(futures):
-            auction_id, rows = future.result()
-            all_rows.extend(rows)
-            harvested_auction_ids.append(auction_id)
+            try:
+                auction_id, rows = future.result()
+                all_rows.extend(rows)
+                harvested_auction_ids.append(auction_id)
+            except Exception as e:
+                r, a = futures[future]
+                print(f"[historical] skipped {a}: {e}")
 
     with sqlite3.connect(DB_PATH) as conn:
         inserted = _insert_batch(conn, all_rows, source="api")
