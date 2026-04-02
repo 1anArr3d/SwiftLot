@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -18,6 +18,17 @@ const LoginPage = () => {
       navigate(from, { replace: true });
     } catch (e) {
       setError(e.message);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email) { setError('Enter your email above first.'); return; }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setError('');
+      alert('Password reset email sent. Check your inbox.');
+    } catch (e) {
+      setError(e.message.replace('Firebase: ', '').replace(/ \(auth\/.*\)\.?/, ''));
     }
   };
 
@@ -79,6 +90,11 @@ const LoginPage = () => {
           className="login-input"
         />
         {error && <p className="login-error">{error}</p>}
+        {!isRegister && (
+          <button type="button" className="btn-link" onClick={handleForgotPassword}>
+            Forgot password?
+          </button>
+        )}
         <button type="submit" className="btn-primary">
           {isRegister ? 'Create Account' : 'Sign In'}
         </button>
