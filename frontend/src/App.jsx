@@ -8,6 +8,7 @@ import AuctionDetailPage from './pages/AuctionDetailPage';
 import WatchlistPage from './pages/WatchlistPage';
 import SavedAuctionsPage from './pages/SavedAuctionsPage';
 import LoginPage from './pages/LoginPage';
+import AboutPage from './pages/AboutPage';
 import './App.css';
 
 const ProtectedRoute = ({ children }) => {
@@ -41,6 +42,7 @@ const NavBar = () => {
         <NavLink to="/auctions" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>Auctions</NavLink>
         <NavLink to="/watchlist" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>Watchlist</NavLink>
         <NavLink to="/my-garage" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>My Garage</NavLink>
+        <NavLink to="/about" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>About</NavLink>
         {user
           ? <button className="btn-link nav-signout" onClick={handleSignOut}>Sign Out</button>
           : <NavLink to="/login" className="nav-link nav-signout" onClick={close}>Sign In</NavLink>
@@ -61,6 +63,7 @@ const App = () => (
         <Route path="/auctions/:id" element={<AuctionDetailPage />} />
         <Route path="/watchlist" element={<ProtectedRoute><SavedAuctionsPage /></ProtectedRoute>} />
         <Route path="/my-garage" element={<ProtectedRoute><WatchlistPage /></ProtectedRoute>} />
+        <Route path="/about" element={<AboutPage />} />
       </Routes>
     </AuthProvider>
   </BrowserRouter>
