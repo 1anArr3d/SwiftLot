@@ -2,12 +2,27 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
-import { REGION_LABEL, STATE_LABEL, getState } from '../constants';
+import { REGION_LABEL, STATE_LABEL, getState, REGION_PHOTOS } from '../constants';
+
+const cityPhotos = import.meta.glob('../assets/cityphotos/Photos/*.jpg', { eager: true });
+
+const isCSTNight = () => {
+  const hour = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' })).getHours();
+  return hour >= 18 || hour < 6;
+};
+
+const getRegionPhoto = (regionId) => {
+  const entry = REGION_PHOTOS[regionId];
+  if (!entry) return null;
+  const filename = isCSTNight() ? entry.night : entry.day;
+  return cityPhotos[`../assets/cityphotos/Photos/${filename}`]?.default ?? null;
+};
 
 const AuctionsPage = () => {
   const [auctions, setAuctions] = useState([]);
   const [openStates, setOpenStates] = useState(new Set());
   const [savedIds, setSavedIds] = useState(new Set());
+
   const navigate = useNavigate();
   const { token } = useAuth();
 
@@ -53,14 +68,6 @@ const AuctionsPage = () => {
     });
   };
 
-  if (active.length === 0) {
-    return (
-      <div className="page-content">
-        <div className="empty-msg">No auctions found.</div>
-      </div>
-    );
-  }
-
   return (
     <div className="page-content">
       {states.map(state => {
@@ -86,10 +93,14 @@ const AuctionsPage = () => {
                   const regionAuctions = stateAuctions.filter(a => a.region_id === regionId);
                   if (!regionAuctions.length) return null;
                   const regionLabel = REGION_LABEL[regionId] || regionId;
+                  const photo = getRegionPhoto(regionId);
 
                   return (
                     <div key={regionId} className="region-section">
-                      <div className="region-hero">
+                      <div
+                        className="region-hero"
+                        style={photo ? { backgroundImage: `url(${photo})`, backgroundSize: 'cover', backgroundPosition: 'center center' } : {}}
+                      >
                         <div className="region-hero-overlay">
                           <h2 className="region-hero-title">{regionLabel}</h2>
                         </div>
@@ -99,16 +110,11 @@ const AuctionsPage = () => {
                         {regionAuctions.map(a => (
                           <div
                             key={a.auction_id}
-                            className={`auction-card${a.vehicles_listed > 0 ? ' has-vehicles' : ''}${a.auction_status === 'live' || a.auction_status === 'paused' ? ' is-live' : ''}`}
+                            className={`auction-card${a.vehicles_listed > 0 ? ' has-vehicles' : ''}`}
                             onClick={() => navigate(`/auctions/${a.auction_id}`)}
                           >
                             <div className="auction-card-top">
                               <div className="auction-card-seller">{a.seller_name || a.auction_id}</div>
-                              {(a.auction_status === 'live' || a.auction_status === 'paused') && (
-                                <span className={`badge-live${a.auction_status === 'paused' ? ' badge-paused' : ''}`}>
-                                  {a.auction_status === 'paused' ? 'PAUSED' : 'LIVE'}
-                                </span>
-                              )}
                             </div>
 
                             <div className="auction-card-divider" />

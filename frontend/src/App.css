@@ -99,7 +99,7 @@ input, button { font-family: var(--font); }
 
 /* REGION SECTIONS */
 .region-section { margin-bottom: 32px; }
-.region-hero { height: 120px; border-radius: var(--radius-md); overflow: hidden; background: var(--hero); border: 1px solid var(--border-bright); margin-bottom: var(--space-md); position: relative; }
+.region-hero { height: 340px; border-radius: var(--radius-md); overflow: hidden; background: var(--hero); border: 1px solid var(--border-bright); margin-bottom: var(--space-md); position: relative; }
 .region-hero-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; padding: var(--space-md) var(--space-lg); }
 .region-hero-title { margin: 0; font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.04em; text-shadow: 0 2px 8px rgba(0,0,0,0.6); }
 
@@ -264,6 +264,10 @@ input, button { font-family: var(--font); }
   .app-wrapper { flex-direction: column; }
   .sidebar { width: 100%; min-width: 0; height: auto; max-height: none; position: static; border-right: none; border-bottom: 2px solid var(--border-bright); border-radius: 0; overflow-y: visible; }
   .checklist { max-height: none; }
+
+  /* Region hero: shorter on mobile */
+  .region-hero { height: 200px; }
+  .region-hero-title { font-size: 17px; }
 
   /* Auction grid: single column on small screens */
   .auction-grid { grid-template-columns: 1fr; }
