@@ -15,7 +15,7 @@ echo "==> Updating system packages"
 apt-get update -y && apt-get upgrade -y
 
 echo "==> Installing dependencies"
-apt-get install -y python3 python3-pip python3-venv git postgresql postgresql-contrib
+apt-get install -y python3 python3-pip python3-venv git postgresql postgresql-contrib xvfb
 
 echo "==> Starting Postgres"
 systemctl enable postgresql
@@ -53,7 +53,7 @@ Requires=postgresql.service
 User=root
 WorkingDirectory=$APP_DIR/backend
 EnvironmentFile=$APP_DIR/backend/.env
-ExecStart=$APP_DIR/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+ExecStart=xvfb-run $APP_DIR/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
 
