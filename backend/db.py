@@ -1,53 +1,68 @@
-import sqlite3
-from config import DB_PATH
+import psycopg2
+import psycopg2.extras
+import psycopg2.pool
+from config import DATABASE_URL
 
-# Bump this when the schema changes to trigger a migration
-SCHEMA_VERSION = 8
+_pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=2, maxconn=20, dsn=DATABASE_URL
+        )
+    return _pool
+
+
+class _Conn:
+    """Thin wrapper so callers can do conn.execute(sql, args) like sqlite3."""
+
+    def __init__(self, raw: psycopg2.extensions.connection):
+        self._raw = raw
+
+    def execute(self, sql: str, args: tuple = ()):
+        cur = self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, args or None)
+        return cur
+
+
+class _ConnCtx:
+    """Context manager: borrows a connection, commits or rolls back, returns it."""
+
+    def __enter__(self) -> _Conn:
+        self._raw = _get_pool().getconn()
+        self._raw.autocommit = False
+        return _Conn(self._raw)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            self._raw.rollback()
+        else:
+            self._raw.commit()
+        _get_pool().putconn(self._raw)
+
+
+def get_db() -> _ConnCtx:
+    """Use as: `with get_db() as conn: conn.execute(...)`"""
+    return _ConnCtx()
 
 
 def query(sql: str, args: tuple = (), one: bool = False):
-    with get_db() as conn:
-        cur = conn.execute(sql, args)
-        rv = cur.fetchall()
-        return (rv[0] if rv else None) if one else rv
+    """Run a SELECT and return all rows (or one). Rows are dict-like."""
+    raw = _get_pool().getconn()
+    try:
+        with raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, args or None)
+            rows = cur.fetchall()
+            return (rows[0] if rows else None) if one else rows
+    finally:
+        raw.rollback()  # no-op for reads; releases any implicit txn
+        _get_pool().putconn(raw)
 
 
 def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        current = conn.execute("PRAGMA user_version").fetchone()[0]
-        if current < SCHEMA_VERSION:
-            if current < 3:
-                # Pre-v3: drop and recreate core tables
-                conn.execute("DROP TABLE IF EXISTS watchlist")
-                conn.execute("DROP TABLE IF EXISTS vehicles")
-                conn.execute("DROP TABLE IF EXISTS auctions")
-            if current == 3:
-                # v3 → v4: non-destructive, just add harvested column
-                conn.execute("ALTER TABLE auctions ADD COLUMN harvested INTEGER DEFAULT 0")
-            if current == 4:
-                # v4 → v5: add user_id to watchlist for per-user isolation
-                conn.execute("ALTER TABLE watchlist ADD COLUMN user_id TEXT")
-            if current == 5:
-                # v5 → v6: add saved_auctions table
-                conn.execute('''CREATE TABLE IF NOT EXISTS saved_auctions (
-                    auction_id  TEXT,
-                    user_id     TEXT,
-                    saved_at    TEXT,
-                    PRIMARY KEY (auction_id, user_id)
-                )''')
-            if current == 6:
-                # v6 → v7: add closes_at to auctions for sort
-                conn.execute("ALTER TABLE auctions ADD COLUMN closes_at TEXT")
-            if current == 7:
-                # v7 → v8: rename watchlist to garage
-                conn.execute("ALTER TABLE watchlist RENAME TO garage")
-
+    with get_db() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
             auction_id         TEXT PRIMARY KEY,
             region_id          TEXT,
@@ -58,8 +73,8 @@ def init_db():
             last_scraped_count INTEGER,
             last_scraped_at    TEXT,
             series_key         TEXT,
-            minimum_bid        REAL,
-            sales_tax          REAL,
+            minimum_bid        DOUBLE PRECISION,
+            sales_tax          DOUBLE PRECISION,
             ended_at           TEXT,
             closes_at          TEXT,
             harvested          INTEGER DEFAULT 0
@@ -85,10 +100,10 @@ def init_db():
             seller_id          TEXT,
             item_id            TEXT,
             item_key           TEXT,
-            current_bid        REAL,
+            current_bid        DOUBLE PRECISION,
             bid_expiration     TEXT,
-            reserve_price      REAL,
-            fee_price          REAL,
+            reserve_price      DOUBLE PRECISION,
+            fee_price          DOUBLE PRECISION,
             seller_notes       TEXT,
             images             TEXT,
             images_count       INTEGER,
@@ -97,10 +112,10 @@ def init_db():
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS odometer_history (
-            row_id         TEXT PRIMARY KEY,
-            vin            TEXT,
+            row_id          TEXT PRIMARY KEY,
+            vin             TEXT,
             inspection_date TEXT,
-            mileage        INTEGER
+            mileage         INTEGER
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS garage (
@@ -124,10 +139,10 @@ def init_db():
             seller_id          TEXT,
             item_id            TEXT,
             item_key           TEXT,
-            current_bid        REAL,
+            current_bid        DOUBLE PRECISION,
             bid_expiration     TEXT,
-            reserve_price      REAL,
-            fee_price          REAL,
+            reserve_price      DOUBLE PRECISION,
+            fee_price          DOUBLE PRECISION,
             images             TEXT,
             images_count       INTEGER,
             last_recorded_odo  TEXT,
@@ -136,7 +151,7 @@ def init_db():
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS historical_sales (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            id          SERIAL PRIMARY KEY,
             vin         TEXT,
             year        INTEGER,
             make        TEXT,
@@ -145,11 +160,11 @@ def init_db():
             key_status  TEXT,
             region_id   TEXT,
             auction_id  TEXT,
-            final_sale  REAL,
-            fees_total  REAL,
+            final_sale  DOUBLE PRECISION,
+            fees_total  DOUBLE PRECISION,
             sold_at     TEXT,
             source      TEXT,
-            UNIQUE(vin, auction_id)
+            UNIQUE (vin, auction_id)
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS saved_auctions (
@@ -159,4 +174,4 @@ def init_db():
             PRIMARY KEY (auction_id, user_id)
         )''')
 
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    print("[db] Schema ready.")

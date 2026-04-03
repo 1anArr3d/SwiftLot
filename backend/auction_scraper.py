@@ -3,12 +3,11 @@ API-based auction scraper — replaces Playwright scraping entirely.
 Fetches vehicle inventory from the Autura items-http microservice.
 """
 import json
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 
 import autura_api
-from config import DB_PATH
+from db import get_db
 
 
 def _format_odo(raw_odo):
@@ -106,40 +105,40 @@ def save_vehicle(conn, item: dict, auction_id: str, region_id: str):
             current_bid, bid_expiration, reserve_price, fee_price,
             seller_notes, images, images_count, published_at, last_recorded_odo
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?,
-            ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
+            %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s,
+            %s, %s, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s
         )
-        ON CONFLICT(vin) DO UPDATE SET
-            year               = excluded.year,
-            make               = excluded.make,
-            model              = excluded.model,
-            body_type          = excluded.body_type,
-            color              = excluded.color,
-            key_status         = excluded.key_status,
-            catalytic_converter = excluded.catalytic_converter,
-            start_status       = excluded.start_status,
-            engine_type        = excluded.engine_type,
-            drivetrain         = excluded.drivetrain,
-            fuel_type          = excluded.fuel_type,
-            num_cylinders      = excluded.num_cylinders,
-            documentation_type = excluded.documentation_type,
-            auction_id         = excluded.auction_id,
-            region_id          = excluded.region_id,
-            seller_id          = excluded.seller_id,
-            item_id            = excluded.item_id,
-            item_key           = excluded.item_key,
-            current_bid        = excluded.current_bid,
-            bid_expiration     = excluded.bid_expiration,
-            reserve_price      = excluded.reserve_price,
-            fee_price          = excluded.fee_price,
-            seller_notes       = excluded.seller_notes,
-            images             = excluded.images,
-            images_count       = excluded.images_count,
-            published_at       = excluded.published_at
+        ON CONFLICT (vin) DO UPDATE SET
+            year               = EXCLUDED.year,
+            make               = EXCLUDED.make,
+            model              = EXCLUDED.model,
+            body_type          = EXCLUDED.body_type,
+            color              = EXCLUDED.color,
+            key_status         = EXCLUDED.key_status,
+            catalytic_converter = EXCLUDED.catalytic_converter,
+            start_status       = EXCLUDED.start_status,
+            engine_type        = EXCLUDED.engine_type,
+            drivetrain         = EXCLUDED.drivetrain,
+            fuel_type          = EXCLUDED.fuel_type,
+            num_cylinders      = EXCLUDED.num_cylinders,
+            documentation_type = EXCLUDED.documentation_type,
+            auction_id         = EXCLUDED.auction_id,
+            region_id          = EXCLUDED.region_id,
+            seller_id          = EXCLUDED.seller_id,
+            item_id            = EXCLUDED.item_id,
+            item_key           = EXCLUDED.item_key,
+            current_bid        = EXCLUDED.current_bid,
+            bid_expiration     = EXCLUDED.bid_expiration,
+            reserve_price      = EXCLUDED.reserve_price,
+            fee_price          = EXCLUDED.fee_price,
+            seller_notes       = EXCLUDED.seller_notes,
+            images             = EXCLUDED.images,
+            images_count       = EXCLUDED.images_count,
+            published_at       = EXCLUDED.published_at
     ''', (
         info.get("vin"),
         year,
@@ -194,24 +193,22 @@ def scrape_data(auction_id: str, region_id: str) -> int:
             image_map[key] = future.result()
 
     saved = 0
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_db() as conn:
         for item in valid:
             item_key = item.get("key")
             if item_key and image_map.get(item_key):
                 item["_images_override"] = image_map[item_key]
             save_vehicle(conn, item, full_id, region_id)
             saved += 1
-        conn.commit()
 
     print(f"[scraper] Saved {saved} vehicles for {full_id}")
     return saved
 
 
-def scrape_all_published(skip_auction_ids: set = None) -> dict[str, int]:
+def scrape_all_published() -> dict[str, int]:
     """
     Fetch all published vehicles nationwide in one API call.
     Returns {auction_id: vehicle_count} for updating auctions table.
-    skip_auction_ids: auctions already covered by RTDB listener (skip re-scraping their bids).
     """
     print("[scraper] Fetching all published vehicles...")
     result = autura_api._post(autura_api._SEARCH_HTTP, "searchEngine-getPublishedVehiclesForFilters", {"limit": 2000})
@@ -222,24 +219,18 @@ def scrape_all_published(skip_auction_ids: set = None) -> dict[str, int]:
     if not valid:
         return {}
 
-    skip = skip_auction_ids or set()
-    to_save = [item for item in valid if item.get("auctionId") not in skip]
-    skipped = len(valid) - len(to_save)
-    if skipped:
-        print(f"[scraper] Skipping {skipped} vehicles in listener-covered auctions")
-
     # Fetch full image sets in parallel
     image_map: dict[str, list[str]] = {}
     with ThreadPoolExecutor(max_workers=10) as pool:
         futures = {pool.submit(autura_api.get_item_images, item["key"]): item["key"]
-                   for item in to_save if item.get("key")}
+                   for item in valid if item.get("key")}
         for future in as_completed(futures):
             key = futures[future]
             image_map[key] = future.result()
 
     counts: dict[str, int] = {}
-    with sqlite3.connect(DB_PATH) as conn:
-        for item in to_save:
+    with get_db() as conn:
+        for item in valid:
             auction_id = item.get("auctionId", "")
             region_id  = item.get("regionId", "")
             item_key   = item.get("key")
@@ -247,13 +238,6 @@ def scrape_all_published(skip_auction_ids: set = None) -> dict[str, int]:
                 item["_images_override"] = image_map[item_key]
             save_vehicle(conn, item, auction_id, region_id)
             counts[auction_id] = counts.get(auction_id, 0) + 1
-        conn.commit()
 
-    # Still count skipped auctions so vehicles_listed stays accurate
-    for item in valid:
-        aid = item.get("auctionId", "")
-        if aid in skip:
-            counts[aid] = counts.get(aid, 0) + 1
-
-    print(f"[scraper] Saved {len(to_save)} vehicles across {len(counts)} auctions")
+    print(f"[scraper] Saved {len(valid)} vehicles across {len(counts)} auctions")
     return counts

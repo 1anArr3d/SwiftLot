@@ -8,25 +8,25 @@ Three entry points:
 """
 import json
 import os
-import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import autura_api
-from config import DB_PATH
+from db import get_db, query
 
 _JSON_PATH = os.path.join(os.path.dirname(__file__), "historical_sales.json")
 
 
-def _insert_batch(conn: sqlite3.Connection, rows: list[dict], source: str):
+def _insert_batch(conn, rows: list[dict], source: str):
     """Insert a batch of sale records, skipping duplicates."""
     inserted = 0
     for row in rows:
         try:
-            conn.execute(
-                """INSERT OR IGNORE INTO historical_sales
+            cur = conn.execute(
+                """INSERT INTO historical_sales
                    (vin, year, make, model, color, key_status,
                     region_id, auction_id, final_sale, fees_total, sold_at, source)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (vin, auction_id) DO NOTHING""",
                 (
                     row.get("vin"),
                     row.get("year"),
@@ -42,7 +42,7 @@ def _insert_batch(conn: sqlite3.Connection, rows: list[dict], source: str):
                     source,
                 ),
             )
-            if conn.execute("SELECT changes()").fetchone()[0]:
+            if cur.rowcount:
                 inserted += 1
         except Exception as e:
             print(f"[historical] insert error for {row.get('vin')}: {e}")
@@ -74,9 +74,8 @@ def seed_from_json():
             "sold_at":    r.get("expiration"),
         })
 
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_db() as conn:
         inserted = _insert_batch(conn, rows, source="json")
-        conn.commit()
 
     print(f"[historical] JSON seed: {inserted} new records from {len(records)} total")
 
@@ -114,25 +113,31 @@ def harvest_auction(region_id: str, auction_id: str):
     Must be called before vehicles are deleted from the DB.
     Only marks harvested=1 if rows were actually inserted.
     """
-    with sqlite3.connect(DB_PATH) as conn:
-        vehicle_rows = conn.execute("""
-            SELECT vin, year, make, model, color, key_status,
-                   region_id, auction_id, current_bid, fee_price, bid_expiration
-            FROM vehicles WHERE auction_id = ?
-        """, (auction_id,)).fetchall()
-        inserted = 0
+    vehicle_rows = query("""
+        SELECT vin, year, make, model, color, key_status,
+               region_id, auction_id, current_bid, fee_price, bid_expiration
+        FROM vehicles WHERE auction_id = %s
+    """, (auction_id,))
+
+    inserted = 0
+    with get_db() as conn:
         for r in vehicle_rows:
-            conn.execute("""
-                INSERT OR IGNORE INTO historical_sales
+            cur = conn.execute("""
+                INSERT INTO historical_sales
                     (vin, year, make, model, color, key_status, region_id, auction_id,
                      final_sale, fees_total, sold_at, source)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,'listener')
-            """, r)
-            if conn.execute("SELECT changes()").fetchone()[0]:
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'listener')
+                ON CONFLICT (vin, auction_id) DO NOTHING
+            """, (
+                r["vin"], r["year"], r["make"], r["model"], r["color"], r["key_status"],
+                r["region_id"], r["auction_id"], r["current_bid"], r["fee_price"],
+                r["bid_expiration"],
+            ))
+            if cur.rowcount:
                 inserted += 1
         if inserted > 0:
-            conn.execute("UPDATE auctions SET harvested = 1 WHERE auction_id = ?", (auction_id,))
-        conn.commit()
+            conn.execute("UPDATE auctions SET harvested = 1 WHERE auction_id = %s", (auction_id,))
+
     print(f"[historical] {auction_id}: {inserted}/{len(vehicle_rows)} records captured")
 
 
@@ -152,17 +157,16 @@ def harvest_api():
         return
 
     # Skip auctions already present in historical_sales or marked harvested
-    with sqlite3.connect(DB_PATH) as conn:
-        harvested_ids = {
-            row[0] for row in conn.execute(
-                "SELECT DISTINCT auction_id FROM historical_sales WHERE source = 'api'"
-            ).fetchall()
-        }
-        harvested_ids |= {
-            row[0] for row in conn.execute(
-                "SELECT auction_id FROM auctions WHERE harvested = 1"
-            ).fetchall()
-        }
+    harvested_ids = {
+        row["auction_id"] for row in query(
+            "SELECT DISTINCT auction_id FROM historical_sales WHERE source = 'api'"
+        )
+    }
+    harvested_ids |= {
+        row["auction_id"] for row in query(
+            "SELECT auction_id FROM auctions WHERE harvested = 1"
+        )
+    }
 
     to_harvest = [(r, a) for r, a in ended if a not in harvested_ids]
     print(f"[historical] API harvest: {len(to_harvest)} auctions to process ({len(ended) - len(to_harvest)} already done)")
@@ -185,12 +189,11 @@ def harvest_api():
                 r, a = futures[future]
                 print(f"[historical] skipped {a}: {e}")
 
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_db() as conn:
         inserted = _insert_batch(conn, all_rows, source="api")
         for auction_id in harvested_auction_ids:
             conn.execute(
-                "UPDATE auctions SET harvested = 1 WHERE auction_id = ?", (auction_id,)
+                "UPDATE auctions SET harvested = 1 WHERE auction_id = %s", (auction_id,)
             )
-        conn.commit()
 
     print(f"[historical] API harvest complete: {inserted} new records from {len(harvested_auction_ids)} auctions")

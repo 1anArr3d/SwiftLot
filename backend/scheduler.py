@@ -30,12 +30,12 @@ def scheduled_discovery_and_scrape():
     with get_db() as conn:
         for auction_id, count in counts.items():
             conn.execute(
-                "UPDATE auctions SET vehicles_listed = ?, last_scraped_at = datetime('now') WHERE auction_id = ?",
+                "UPDATE auctions SET vehicles_listed = %s, last_scraped_at = NOW() WHERE auction_id = %s",
                 (count, auction_id)
             )
         # Zero out auctions not seen in this scrape
         if counts:
-            placeholders = ",".join("?" * len(counts))
+            placeholders = ",".join(["%s"] * len(counts))
             conn.execute(
                 f"UPDATE auctions SET vehicles_listed = 0 WHERE auction_id NOT IN ({placeholders}) AND auction_status != 'completed'",
                 list(counts.keys())

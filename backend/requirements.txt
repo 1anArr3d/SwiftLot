@@ -1,4 +1,5 @@
 fastapi==0.128.8
+psycopg2-binary==2.9.10
 uvicorn==0.40.0
 playwright==1.58.0
 APScheduler==3.11.2
