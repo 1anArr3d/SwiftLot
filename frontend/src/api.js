@@ -1,4 +1,4 @@
-export const API = import.meta.env.DEV ? 'http://127.0.0.1:8000/api/v1' : '/api/v1';
+export const API = import.meta.env.DEV ? 'http://127.0.0.1:8000/api/v1' : 'http://5.78.188.228:8000/api/v1';
 
 export const authFetch = (token, url, options = {}) => {
   return fetch(url, {
