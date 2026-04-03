@@ -31,7 +31,7 @@ const AboutPage = () => (
       <li>Live auction tracking with real-time bid updates</li>
       <li>Historical average sale prices for make, model, and year</li>
       <li>Garage to save and follow vehicles across auctions</li>
-      <li>Completed auction history so nothing disappears when it ends</li>
+      <li>Garage snapshots preserve your saved vehicles after an auction closes</li>
     </ul>
   </div>
 );
