@@ -41,19 +41,19 @@ def handle_auction_completed(auction_id: str, region_id: str):
                 SELECT v.current_bid FROM vehicles v WHERE v.vin = garage.vin
             )
             WHERE vin IN (
-                SELECT v.vin FROM vehicles v WHERE v.auction_id = ?
+                SELECT v.vin FROM vehicles v WHERE v.auction_id = %s
             )
         """, (auction_id,))
 
         # Clean up saved auctions watchlist — auction is over
-        conn.execute("DELETE FROM saved_auctions WHERE auction_id = ?", (auction_id,))
+        conn.execute("DELETE FROM saved_auctions WHERE auction_id = %s", (auction_id,))
 
         # Mark completed and delete vehicles
         conn.execute(
-            "UPDATE auctions SET auction_status = 'completed' WHERE auction_id = ?",
+            "UPDATE auctions SET auction_status = 'completed' WHERE auction_id = %s",
             (auction_id,)
         )
-        conn.execute("DELETE FROM vehicles WHERE auction_id = ?", (auction_id,))
+        conn.execute("DELETE FROM vehicles WHERE auction_id = %s", (auction_id,))
 
 
 # ── Per-auction SSE stream handlers ────────────────────────────────────────────
@@ -106,14 +106,14 @@ def _stream_auction_node(region_id: str, auction_id: str, stop: threading.Event)
                         status = "paused" if paused == "paused" else "live"
                         with get_db() as conn:
                             conn.execute(
-                                "UPDATE auctions SET auction_status = ? WHERE auction_id = ?",
+                                "UPDATE auctions SET auction_status = %s WHERE auction_id = %s",
                                 (status, auction_id)
                             )
                     else:
                         # startItem gone but not ended — between vehicles or pre-live
                         with get_db() as conn:
                             conn.execute(
-                                "UPDATE auctions SET auction_status = 'active' WHERE auction_id = ? AND auction_status NOT IN ('completed')",
+                                "UPDATE auctions SET auction_status = 'active' WHERE auction_id = %s AND auction_status NOT IN ('completed')",
                                 (auction_id,)
                             )
 
@@ -180,7 +180,7 @@ def _stream_results_node(region_id: str, auction_id: str, stop: threading.Event)
                         with get_db() as conn:
                             for item_key, amount, expiration in updates:
                                 conn.execute(
-                                    "UPDATE vehicles SET current_bid = ?, bid_expiration = ? WHERE item_key = ?",
+                                    "UPDATE vehicles SET current_bid = %s, bid_expiration = %s WHERE item_key = %s",
                                     (amount, expiration, item_key)
                                 )
 
@@ -244,7 +244,7 @@ def sync_with_db():
     """
     rows = query(
         "SELECT auction_id, region_id FROM auctions WHERE auction_status != 'completed'"
-    )
+    )  # no args — no placeholders needed
     db_active = {row["auction_id"]: row["region_id"] for row in rows}
 
     # Subscribe to new ones

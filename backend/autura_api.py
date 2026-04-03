@@ -21,11 +21,23 @@ _SEARCH_HTTP   = "https://search-http-duoqjfx26q-uc.a.run.app/api/internal/searc
 
 _token: str | None = None
 _token_expiry: float = 0
+_token_lock = __import__('threading').Lock()
 
 
 def _login() -> dict:
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={_API_KEY}"
-    payload = json.dumps({"email": EMAIL, "password": PASSWORD, "returnSecureToken": True}).encode()
+    # Try email/password first; fall back to anonymous auth for RTDB-only access
+    if EMAIL and PASSWORD:
+        try:
+            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={_API_KEY}"
+            payload = json.dumps({"email": EMAIL, "password": PASSWORD, "returnSecureToken": True}).encode()
+            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read())
+        except Exception:
+            pass
+    # Anonymous auth — works for RTDB reads (public auction data)
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={_API_KEY}"
+    payload = json.dumps({"returnSecureToken": True}).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read())
@@ -35,11 +47,14 @@ def get_token() -> str:
     global _token, _token_expiry
     if _token and time.time() < _token_expiry - 60:
         return _token
-    data = _login()
-    _token = data["idToken"]
-    _token_expiry = time.time() + int(data.get("expiresIn", 3600))
-    print("[autura_api] Refreshed auth token")
-    return _token
+    with _token_lock:
+        if _token and time.time() < _token_expiry - 60:
+            return _token
+        data = _login()
+        _token = data["idToken"]
+        _token_expiry = time.time() + int(data.get("expiresIn", 3600))
+        print("[autura_api] Refreshed auth token")
+        return _token
 
 
 def _post(base_url: str, fn_name: str, inner: dict) -> dict:

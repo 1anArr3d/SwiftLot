@@ -3,13 +3,11 @@ from fastapi.responses import StreamingResponse
 from auth import get_current_user, require_admin
 from db import query, get_db
 from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction, JobStatus
-from config import DB_PATH
 from state import scrape_status, discovery_status, inspection_status
 import auction_scraper as scraper
 import inspection_scraper as inspection
 import auction_discovery as discovery
 import rtdb_listener as listener
-import sqlite3
 import threading
 import asyncio
 import json
@@ -39,7 +37,7 @@ def get_auctions():
 
 @router.get("/auctions/{auction_id}", response_model=Auction, tags=["auctions"])
 def get_auction(auction_id: str):
-    row = query("SELECT * FROM auctions WHERE auction_id = ?", (auction_id,), one=True)
+    row = query("SELECT * FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
     if not row:
         raise HTTPException(status_code=404, detail="Auction not found")
     return dict(row)
@@ -55,7 +53,7 @@ def delete_auctions(user_id: str = Depends(require_admin)):
 
 @router.get("/auctions/{auction_id}/vehicles", response_model=list[Vehicle], tags=["auctions"])
 def get_auction_vehicles(auction_id: str):
-    rows = query("SELECT * FROM vehicles WHERE auction_id = ?", (auction_id,))
+    rows = query("SELECT * FROM vehicles WHERE auction_id = %s", (auction_id,))
     return [dict(row) for row in rows]
 
 
@@ -64,7 +62,7 @@ def get_auction_vehicles(auction_id: str):
 @router.get("/vehicles/{vin}/history", tags=["vehicles"])
 def get_vehicle_history(vin: str):
     rows = query(
-        "SELECT * FROM historical_sales WHERE vin = ? ORDER BY sold_at DESC",
+        "SELECT * FROM historical_sales WHERE vin = %s ORDER BY sold_at DESC",
         (vin,)
     )
     return [dict(row) for row in rows]
@@ -74,14 +72,14 @@ def get_vehicle_history(vin: str):
 def get_historical_stats(make: str, model: str, year: int):
     row = query(
         """SELECT
-               COUNT(*)        AS count,
-               ROUND(AVG(final_sale), 0) AS avg_sale,
-               MIN(final_sale) AS min_sale,
-               MAX(final_sale) AS max_sale
+               COUNT(*)                   AS count,
+               ROUND(AVG(final_sale)::numeric, 0)  AS avg_sale,
+               MIN(final_sale)            AS min_sale,
+               MAX(final_sale)            AS max_sale
            FROM historical_sales
-           WHERE UPPER(make) = UPPER(?)
-             AND UPPER(model) = UPPER(?)
-             AND year = ?
+           WHERE UPPER(make) = UPPER(%s)
+             AND UPPER(model) = UPPER(%s)
+             AND year = %s
              AND final_sale IS NOT NULL""",
         (make, model, year),
         one=True,
@@ -103,21 +101,21 @@ def get_historical_stats(make: str, model: str, year: int):
 def search_historical(make: str = None, model: str = None, year: int = None, region_id: str = None, limit: int = 50):
     filters, args = [], []
     if make:
-        filters.append("UPPER(make) = UPPER(?)")
+        filters.append("UPPER(make) = UPPER(%s)")
         args.append(make)
     if model:
-        filters.append("UPPER(model) LIKE UPPER(?)")
+        filters.append("UPPER(model) LIKE UPPER(%s)")
         args.append(f"%{model}%")
     if year:
-        filters.append("year = ?")
+        filters.append("year = %s")
         args.append(year)
     if region_id:
-        filters.append("region_id = ?")
+        filters.append("region_id = %s")
         args.append(region_id)
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
     args.append(limit)
     rows = query(
-        f"SELECT * FROM historical_sales {where} ORDER BY sold_at DESC LIMIT ?",
+        f"SELECT * FROM historical_sales {where} ORDER BY sold_at DESC LIMIT %s",
         tuple(args)
     )
     return [dict(row) for row in rows]
@@ -128,7 +126,7 @@ def search_historical(make: str = None, model: str = None, year: int = None, reg
 
 @router.get("/vehicles/{vin}/odometer", response_model=list[OdometerEntry], tags=["vehicles"])
 def get_odometer_history(vin: str):
-    rows = query("SELECT * FROM odometer_history WHERE vin = ? ORDER BY inspection_date DESC", (vin,))
+    rows = query("SELECT * FROM odometer_history WHERE vin = %s ORDER BY inspection_date DESC", (vin,))
     return [dict(row) for row in rows]
 
 
@@ -146,7 +144,7 @@ def get_garage(user_id: str = Depends(get_current_user)):
                w.liked_at
         FROM garage w
         JOIN vehicles v ON v.vin = w.vin
-        WHERE w.user_id = ?
+        WHERE w.user_id = %s
 
         UNION ALL
 
@@ -158,7 +156,7 @@ def get_garage(user_id: str = Depends(get_current_user)):
                w.images, w.images_count, NULL, w.last_recorded_odo,
                w.liked_at
         FROM garage w
-        WHERE w.user_id = ?
+        WHERE w.user_id = %s
           AND NOT EXISTS (SELECT 1 FROM vehicles v WHERE v.vin = w.vin)
 
         ORDER BY liked_at DESC
@@ -168,24 +166,25 @@ def get_garage(user_id: str = Depends(get_current_user)):
 
 @router.post("/garage/{vin}", tags=["garage"])
 def add_to_garage(vin: str, user_id: str = Depends(get_current_user)):
-    vehicle = query("SELECT * FROM vehicles WHERE vin = ?", (vin,), one=True)
+    vehicle = query("SELECT * FROM vehicles WHERE vin = %s", (vin,), one=True)
     if not vehicle:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     with get_db() as conn:
         conn.execute('''
-            INSERT OR IGNORE INTO garage (
+            INSERT INTO garage (
                 vin, user_id, year, make, model, body_type, color, key_status, catalytic_converter,
                 start_status, engine_type, drivetrain, fuel_type, num_cylinders,
                 documentation_type, auction_id, region_id, seller_id, item_id, item_key,
                 current_bid, bid_expiration, reserve_price, fee_price,
                 images, images_count, last_recorded_odo, liked_at
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?,
-                ?, ?, ?, datetime('now')
+                %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, NOW()
             )
+            ON CONFLICT (vin, user_id) DO NOTHING
         ''', (
             vehicle["vin"], user_id, vehicle["year"], vehicle["make"], vehicle["model"],
             vehicle["body_type"], vehicle["color"], vehicle["key_status"],
@@ -203,7 +202,7 @@ def add_to_garage(vin: str, user_id: str = Depends(get_current_user)):
 @router.delete("/garage/{vin}", tags=["garage"])
 def remove_from_garage(vin: str, user_id: str = Depends(get_current_user)):
     with get_db() as conn:
-        conn.execute("DELETE FROM garage WHERE vin = ? AND user_id = ?", (vin, user_id))
+        conn.execute("DELETE FROM garage WHERE vin = %s AND user_id = %s", (vin, user_id))
     return {"status": "removed", "vin": vin}
 
 
@@ -216,7 +215,7 @@ def get_saved_auctions(user_id: str = Depends(get_current_user)):
                a.vehicles_listed, a.closes_at, s.saved_at
         FROM saved_auctions s
         JOIN auctions a ON s.auction_id = a.auction_id
-        WHERE s.user_id = ?
+        WHERE s.user_id = %s
         ORDER BY s.saved_at DESC
     """, (user_id,))
     return [dict(row) for row in rows]
@@ -224,12 +223,12 @@ def get_saved_auctions(user_id: str = Depends(get_current_user)):
 
 @router.post("/saved-auctions/{auction_id}", tags=["saved-auctions"])
 def save_auction(auction_id: str, user_id: str = Depends(get_current_user)):
-    auction = query("SELECT auction_id FROM auctions WHERE auction_id = ?", (auction_id,), one=True)
+    auction = query("SELECT auction_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
     if not auction:
         raise HTTPException(status_code=404, detail="Auction not found")
     with get_db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO saved_auctions (auction_id, user_id, saved_at) VALUES (?, ?, datetime('now'))",
+            "INSERT INTO saved_auctions (auction_id, user_id, saved_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
             (auction_id, user_id)
         )
     return {"status": "saved", "auction_id": auction_id}
@@ -239,7 +238,7 @@ def save_auction(auction_id: str, user_id: str = Depends(get_current_user)):
 def unsave_auction(auction_id: str, user_id: str = Depends(get_current_user)):
     with get_db() as conn:
         conn.execute(
-            "DELETE FROM saved_auctions WHERE auction_id = ? AND user_id = ?",
+            "DELETE FROM saved_auctions WHERE auction_id = %s AND user_id = %s",
             (auction_id, user_id)
         )
     return {"status": "removed", "auction_id": auction_id}
@@ -261,11 +260,11 @@ async def stream_auction_bids(auction_id: str):
         last_status: str | None = None
         while True:
             rows = query(
-                "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = ?",
+                "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = %s",
                 (auction_id,)
             )
             auction = query(
-                "SELECT auction_status FROM auctions WHERE auction_id = ?",
+                "SELECT auction_status FROM auctions WHERE auction_id = %s",
                 (auction_id,), one=True
             )
             current_status = auction["auction_status"] if auction else None
@@ -302,15 +301,15 @@ def _run_scrape(auction_id: str, region_id: str):
     try:
         scrape_status[auction_id] = "running"
         count = scraper.scrape_data(auction_id, region_id)
-        with sqlite3.connect(DB_PATH) as conn:
+        with get_db() as conn:
             conn.execute(
-                "UPDATE auctions SET last_scraped_count = ?, vehicles_listed = ?, last_scraped_at = datetime('now') WHERE auction_id = ?",
+                "UPDATE auctions SET last_scraped_count = %s, vehicles_listed = %s, last_scraped_at = NOW() WHERE auction_id = %s",
                 (count, count, auction_id)
             )
         scrape_status[auction_id] = "done"
         if region_id and region_id.endswith('-TX'):
             rows = query(
-                "SELECT vin FROM vehicles WHERE auction_id = ? AND last_recorded_odo IS NULL",
+                "SELECT vin FROM vehicles WHERE auction_id = %s AND last_recorded_odo IS NULL",
                 (auction_id,)
             )
             vins = [row["vin"] for row in rows]
@@ -349,7 +348,7 @@ def _run_pipeline():
 
 @router.post("/scrape/{auction_id}", tags=["jobs"])
 def start_scrape(auction_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
-    row = query("SELECT region_id FROM auctions WHERE auction_id = ?", (auction_id,), one=True)
+    row = query("SELECT region_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
     if not row:
         raise HTTPException(status_code=404, detail="Auction not found")
     if scrape_status.get(auction_id) == "running":

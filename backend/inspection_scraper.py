@@ -3,14 +3,13 @@ Inspection scraper — Playwright once to solve Turnstile, pure HTTP for all VIN
 Session is acquired once per batch and reused across all lookups.
 """
 import re
-import sqlite3
 from html.parser import HTMLParser
 
 from curl_cffi import requests as cffi_requests
 from playwright.sync_api import sync_playwright
 
 import threading
-from config import DB_PATH
+from db import get_db
 
 SEARCH_URL = "https://www.mytxcar.org/TXCar_Net/SearchVehicleTestHistory.aspx"
 HISTORY_URL = "https://www.mytxcar.org/TXCar_Net/VehicleTestHistory.aspx"
@@ -181,14 +180,19 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
 def _save_history(vin: str, results: list[dict]):
     if not results:
         return
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_db() as conn:
         for i, res in enumerate(results):
             conn.execute(
-                "INSERT OR REPLACE INTO odometer_history VALUES (?, ?, ?, ?)",
+                """INSERT INTO odometer_history (row_id, vin, inspection_date, mileage)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (row_id) DO UPDATE SET
+                       vin = EXCLUDED.vin,
+                       inspection_date = EXCLUDED.inspection_date,
+                       mileage = EXCLUDED.mileage""",
                 (f"{vin}_{i}", vin, res["date"], res["odometer"])
             )
         display = "\n".join(f"{r['date']}: {r['odometer']:,}" for r in results)
-        conn.execute("UPDATE vehicles SET last_recorded_odo = ? WHERE vin = ?", (display, vin))
+        conn.execute("UPDATE vehicles SET last_recorded_odo = %s WHERE vin = %s", (display, vin))
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

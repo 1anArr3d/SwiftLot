@@ -4,11 +4,10 @@ Auction discovery — pure API, no Playwright, nationwide coverage.
 Pulls active region IDs from the search service, then fetches all auction
 series per region via auctions-http. No hardcoded states or region IDs.
 """
-import sqlite3
 from datetime import datetime, timezone
 
 import autura_api
-from config import DB_PATH
+from db import get_db
 
 
 def _epoch_ms_to_iso(epoch_ms) -> str | None:
@@ -25,16 +24,16 @@ def upsert_auction(conn, record: dict):
         INSERT INTO auctions (
             auction_id, region_id, seller_name, auction_status,
             vehicles_listed, last_discovered, series_key, minimum_bid, sales_tax, ended_at, closes_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(auction_id) DO UPDATE SET
-            seller_name     = excluded.seller_name,
-            auction_status  = excluded.auction_status,
-            last_discovered = excluded.last_discovered,
-            series_key      = excluded.series_key,
-            minimum_bid     = excluded.minimum_bid,
-            sales_tax       = excluded.sales_tax,
-            ended_at        = excluded.ended_at,
-            closes_at       = excluded.closes_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (auction_id) DO UPDATE SET
+            seller_name     = EXCLUDED.seller_name,
+            auction_status  = EXCLUDED.auction_status,
+            last_discovered = EXCLUDED.last_discovered,
+            series_key      = EXCLUDED.series_key,
+            minimum_bid     = EXCLUDED.minimum_bid,
+            sales_tax       = EXCLUDED.sales_tax,
+            ended_at        = EXCLUDED.ended_at,
+            closes_at       = EXCLUDED.closes_at
     ''', (
         record["auction_id"],
         record["region_id"],
@@ -52,7 +51,7 @@ def upsert_auction(conn, record: dict):
 
 def mark_completed_auctions(conn, seen_ids: set):
     """Any active auction not seen in this run gets marked completed."""
-    placeholders = ','.join('?' * len(seen_ids))
+    placeholders = ','.join(['%s'] * len(seen_ids))
     conn.execute(
         f"UPDATE auctions SET auction_status='completed' WHERE auction_id NOT IN ({placeholders})",
         list(seen_ids)
@@ -109,13 +108,11 @@ def run_discovery():
     print(f"[discovery] {len(all_auctions)} total, {len(active)} active")
 
     seen_ids = {a["auction_id"] for a in active}
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_db() as conn:
         # Only store active auctions — no point keeping completed ones
         for a in active:
             upsert_auction(conn, a)
-        conn.commit()
         if seen_ids:
             mark_completed_auctions(conn, seen_ids)
-        conn.commit()
 
-    print(f"[discovery] Saved {len(all_auctions)} auctions. Done.")
+    print(f"[discovery] Saved {len(active)} auctions. Done.")
