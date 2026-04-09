@@ -131,7 +131,7 @@ def save_vehicle(conn, item: dict, auction_id: str, region_id: str):
             seller_id          = EXCLUDED.seller_id,
             item_id            = EXCLUDED.item_id,
             item_key           = EXCLUDED.item_key,
-            current_bid        = EXCLUDED.current_bid,
+            current_bid        = GREATEST(vehicles.current_bid, EXCLUDED.current_bid),
             bid_expiration     = EXCLUDED.bid_expiration,
             reserve_price      = EXCLUDED.reserve_price,
             fee_price          = EXCLUDED.fee_price,
