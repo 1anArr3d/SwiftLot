@@ -14,7 +14,7 @@ const WatchlistPage = () => {
   const [expandedVin, setExpandedVin] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [yearRange, setYearRange] = useState([null, null]);
-  const [odoMax, setOdoMax] = useState(null);
+  const [odoRange, setOdoRange] = useState([null, null]);
   const [filters, setFilters] = useState({
     make: new Set(), model: new Set(), start_status: new Set(),
     engine_type: new Set(), drivetrain: new Set(),
@@ -99,22 +99,24 @@ const WatchlistPage = () => {
   const uniqueOpts = (key) => [...new Set(vehicles.map(c => c[key]).filter(Boolean))].sort();
   const setFilter = (key, val) => setFilters(prev => ({ ...prev, [key]: val }));
   const odoValues = vehicles.map(v => parseOdo(v.last_recorded_odo)).filter(v => v !== null);
+  const odoSliderMin = odoValues.length ? Math.floor(Math.min(...odoValues) / 10000) * 10000 : 0;
   const odoSliderMax = odoValues.length ? Math.ceil(Math.max(...odoValues) / 10000) * 10000 : 300000;
-  const odoLimit = odoMax ?? odoSliderMax;
+  const odoMin = odoRange[0] ?? odoSliderMin;
+  const odoMax = odoRange[1] ?? odoSliderMax;
 
-  const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null || odoMax !== null;
+  const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null || odoRange[0] !== null || odoRange[1] !== null;
   const clearAll = () => {
     setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
     setYearRange([null, null]);
-    setOdoMax(null);
+    setOdoRange([null, null]);
   };
 
   const filtered = vehicles.filter(car => {
     const y = parseInt(car.year);
     if (!isNaN(y) && (y < yearMin || y > yearMax)) return false;
-    if (odoMax !== null) {
+    if (odoRange[0] !== null || odoRange[1] !== null) {
       const odo = parseOdo(car.last_recorded_odo);
-      if (odo !== null && odo > odoLimit) return false;
+      if (odo !== null && (odo < odoMin || odo > odoMax)) return false;
     }
     for (const [key, sel] of Object.entries(filters)) {
       if (sel.size > 0 && !sel.has(car[key])) return false;
@@ -148,10 +150,12 @@ const WatchlistPage = () => {
         </FilterSection>
         <FilterSection title="Odometer">
           <div className="year-range-labels">
-            <span>0</span><span>≤ {odoLimit.toLocaleString()} mi</span>
+            <span>{odoMin.toLocaleString()} mi</span><span>{odoMax.toLocaleString()} mi</span>
           </div>
-          <input type="range" min={0} max={odoSliderMax} step={10000} value={odoLimit}
-            onChange={e => setOdoMax(parseInt(e.target.value))} className="slider" />
+          <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMin}
+            onChange={e => setOdoRange([parseInt(e.target.value), odoRange[1]])} className="slider" />
+          <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMax}
+            onChange={e => setOdoRange([odoRange[0], parseInt(e.target.value)])} className="slider" />
         </FilterSection>
         <FilterSection title="Make">
           <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
