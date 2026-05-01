@@ -17,6 +17,7 @@ const AuctionDetailPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedVin, setExpandedVin] = useState(null);
   const [yearRange, setYearRange] = useState([null, null]);
+  const [odoMax, setOdoMax] = useState(null);
   const [histStats, setHistStats] = useState({});
   const [filters, setFilters] = useState({
     make: new Set(), model: new Set(), start_status: new Set(),
@@ -104,6 +105,12 @@ const AuctionDetailPage = () => {
     });
   }, [vehicles]);
 
+  const parseOdo = (odoStr) => {
+    if (!odoStr) return null;
+    const m = odoStr.split('\n')[0].match(/:\s*([\d,]+)/);
+    return m ? parseInt(m[1].replace(/,/g, '')) : null;
+  };
+
   const years = [...new Set(vehicles.map(c => c.year).filter(Boolean))].sort();
   const minYear = years[0] ? parseInt(years[0]) : 2000;
   const maxYear = years[years.length - 1] ? parseInt(years[years.length - 1]) : new Date().getFullYear();
@@ -111,15 +118,24 @@ const AuctionDetailPage = () => {
   const yearMax = yearRange[1] ?? maxYear;
   const uniqueOpts = (key) => [...new Set(vehicles.map(c => c[key]).filter(Boolean))].sort();
   const setFilter = (key, val) => setFilters(prev => ({ ...prev, [key]: val }));
-  const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null;
+  const odoValues = vehicles.map(v => parseOdo(v.last_recorded_odo)).filter(v => v !== null);
+  const odoSliderMax = odoValues.length ? Math.ceil(Math.max(...odoValues) / 10000) * 10000 : 300000;
+  const odoLimit = odoMax ?? odoSliderMax;
+
+  const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null || odoMax !== null;
   const clearAll = () => {
     setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
     setYearRange([null, null]);
+    setOdoMax(null);
   };
 
   const filteredVehicles = vehicles.filter(car => {
     const y = parseInt(car.year);
     if (!isNaN(y) && (y < yearMin || y > yearMax)) return false;
+    if (odoMax !== null) {
+      const odo = parseOdo(car.last_recorded_odo);
+      if (odo !== null && odo > odoLimit) return false;
+    }
     for (const [key, sel] of Object.entries(filters)) {
       if (sel.size > 0 && !sel.has(car[key])) return false;
     }
@@ -149,6 +165,13 @@ const AuctionDetailPage = () => {
             onChange={e => setYearRange([parseInt(e.target.value), yearRange[1]])} className="slider" />
           <input type="range" min={minYear} max={maxYear} value={yearMax}
             onChange={e => setYearRange([yearRange[0], parseInt(e.target.value)])} className="slider" />
+        </FilterSection>
+        <FilterSection title="Odometer">
+          <div className="year-range-labels">
+            <span>0</span><span>≤ {odoLimit.toLocaleString()} mi</span>
+          </div>
+          <input type="range" min={0} max={odoSliderMax} step={10000} value={odoLimit}
+            onChange={e => setOdoMax(parseInt(e.target.value))} className="slider" />
         </FilterSection>
         <FilterSection title="Make">
           <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
