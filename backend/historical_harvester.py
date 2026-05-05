@@ -1,19 +1,13 @@
 """
 Historical sales harvester.
 
-Three entry points:
-  seed_from_json()       — one-time import of historical_sales.json
   harvest_api()          — pull all ended auctions still available via API
   harvest_auction(...)   — capture a single just-completed auction
 """
-import json
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import autura_api
 from db import get_db, query
-
-_JSON_PATH = os.path.join(os.path.dirname(__file__), "historical_sales.json")
 
 
 def _insert_batch(conn, rows: list[dict], source: str):
@@ -47,37 +41,6 @@ def _insert_batch(conn, rows: list[dict], source: str):
         except Exception as e:
             print(f"[historical] insert error for {row.get('vin')}: {e}")
     return inserted
-
-
-def seed_from_json():
-    """Import historical_sales.json into the DB. Skips duplicates."""
-    if not os.path.exists(_JSON_PATH):
-        print("[historical] JSON file not found, skipping seed")
-        return
-
-    with open(_JSON_PATH, "r") as f:
-        records = json.load(f)
-
-    rows = []
-    for r in records:
-        rows.append({
-            "vin":        r.get("vin"),
-            "year":       r.get("year"),
-            "make":       r.get("make"),
-            "model":      r.get("model"),
-            "color":      r.get("color"),
-            "key_status": r.get("key_status"),
-            "region_id":  r.get("region"),
-            "auction_id": r.get("auction_id"),
-            "final_sale": r.get("final_sale"),
-            "fees_total": r.get("fees"),
-            "sold_at":    r.get("expiration"),
-        })
-
-    with get_db() as conn:
-        inserted = _insert_batch(conn, rows, source="json")
-
-    print(f"[historical] JSON seed: {inserted} new records from {len(records)} total")
 
 
 def _harvest_one(region_id: str, auction_id: str) -> list[dict]:

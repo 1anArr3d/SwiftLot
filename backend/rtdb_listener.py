@@ -70,7 +70,7 @@ def _broadcast(auction_id: str, event: dict):
 def handle_auction_completed(auction_id: str, region_id: str):
     """
     Run the end-of-auction snapshot: harvest from vehicles table, sync final bids
-    to garage, then remove vehicles. Called by both listener and scheduler.
+    to garage, then remove vehicles. Called when ended signal arrives from RTDB.
     """
     print(f"[listener] {auction_id} ended — running snapshot")
 
