@@ -106,14 +106,10 @@ def handle_auction_completed(auction_id: str, region_id: str):
 # ── Event-driven scrape triggers ───────────────────────────────────────────────
 
 def _trigger_scrape(auction_id: str, region_id: str):
-    """Scrape a single auction. Sets next_retry_at if 0 vehicles returned."""
+    """Scrape a single auction. Caller must add auction_id to _scraping before calling."""
     import auction_scraper as scraper
     import inspection_scraper as inspection
 
-    with _scraping_lock:
-        if auction_id in _scraping:
-            return
-        _scraping.add(auction_id)
     try:
         count = scraper.scrape_data(auction_id, region_id)
         with get_db() as conn:
@@ -155,6 +151,10 @@ def _trigger_discover_and_scrape(region_id: str, auction_id: str):
         discovery.discover_region(region_id)
         row = query("SELECT auction_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
         if row:
+            with _scraping_lock:
+                if auction_id in _scraping:
+                    return
+                _scraping.add(auction_id)
             _trigger_scrape(auction_id, region_id)
     except Exception as e:
         print(f"[listener] discover+scrape error for {region_id}/{auction_id}: {e}")
@@ -333,20 +333,21 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
 
                         # After initial dump: unknown item_key means a new vehicle was added mid-auction
                         if not is_initial:
-                            with _scraping_lock:
-                                already_scraping = auction_id in _scraping
-                            if not already_scraping:
-                                for item_key, _, _ in updates:
-                                    if item_key:
-                                        row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
-                                        if not row:
-                                            print(f"[listener] Unknown item_key {item_key} in {auction_id} — triggering rescrape")
-                                            threading.Thread(
-                                                target=_trigger_scrape,
-                                                args=(auction_id, region_id),
-                                                daemon=True
-                                            ).start()
-                                            break
+                            for item_key, _, _ in updates:
+                                if item_key:
+                                    row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
+                                    if not row:
+                                        with _scraping_lock:
+                                            if auction_id in _scraping:
+                                                break
+                                            _scraping.add(auction_id)
+                                        print(f"[listener] Unknown item_key {item_key} in {auction_id} — triggering rescrape")
+                                        threading.Thread(
+                                            target=_trigger_scrape,
+                                            args=(auction_id, region_id),
+                                            daemon=True
+                                        ).start()
+                                        break
 
                         is_initial = False
 
@@ -533,10 +534,15 @@ def _retry_checker():
                 "SELECT auction_id, region_id FROM auctions WHERE next_retry_at <= NOW() AND auction_status != 'completed'"
             )
             for row in rows:
-                print(f"[retry] Retrying scrape for {row['auction_id']}")
+                auction_id = row["auction_id"]
+                with _scraping_lock:
+                    if auction_id in _scraping:
+                        continue
+                    _scraping.add(auction_id)
+                print(f"[retry] Retrying scrape for {auction_id}")
                 threading.Thread(
                     target=_trigger_scrape,
-                    args=(row["auction_id"], row["region_id"]),
+                    args=(auction_id, row["region_id"]),
                     daemon=True
                 ).start()
         except Exception as e:
