@@ -260,8 +260,8 @@ def _stream_region_auctions(region_id: str, stop: threading.Event):
 def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Event):
     """Watch /{region}/results/{auction_id} for bid updates on a single auction."""
     url = f"{_RTDB}/{region_id}/results/{auction_id}.json"
-    is_initial = True
     while not stop.is_set():
+        is_initial = True  # reset on every (re)connect so reconnect dump doesn't trigger rescrapes
         token = autura_api.get_token()
         try:
             with requests.get(
@@ -333,17 +333,20 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
 
                         # After initial dump: unknown item_key means a new vehicle was added mid-auction
                         if not is_initial:
-                            for item_key, _, _ in updates:
-                                if item_key:
-                                    row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
-                                    if not row:
-                                        print(f"[listener] Unknown item_key {item_key} in {auction_id} — triggering rescrape")
-                                        threading.Thread(
-                                            target=_trigger_scrape,
-                                            args=(auction_id, region_id),
-                                            daemon=True
-                                        ).start()
-                                        break
+                            with _scraping_lock:
+                                already_scraping = auction_id in _scraping
+                            if not already_scraping:
+                                for item_key, _, _ in updates:
+                                    if item_key:
+                                        row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
+                                        if not row:
+                                            print(f"[listener] Unknown item_key {item_key} in {auction_id} — triggering rescrape")
+                                            threading.Thread(
+                                                target=_trigger_scrape,
+                                                args=(auction_id, region_id),
+                                                daemon=True
+                                            ).start()
+                                            break
 
                         is_initial = False
 
