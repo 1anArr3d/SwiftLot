@@ -246,6 +246,80 @@ def unsave_auction(auction_id: str, user_id: str = Depends(get_current_user)):
 
 # ── SSE Stream ────────────────────────────────────────────────────────────────
 
+@router.get("/stream/multi", tags=["stream"])
+async def stream_multi_auctions(auctions: str = ""):
+    """
+    Single SSE connection for live bid updates across multiple auctions.
+    Query param: auctions=id1,id2,id3
+    Emits: {"type":"bid","auction_id":..,"item_key":..,"amount":..,"expires":..}
+    Emits: {"type":"ended","auction_id":..}  when an individual auction ends
+    Skips auctions with auction_status='completed'.
+    """
+    auction_ids = [a.strip() for a in auctions.split(",") if a.strip()]
+    if not auction_ids:
+        async def _empty():
+            yield f"data: {json.dumps({'type': 'no_active'})}\n\n"
+        return StreamingResponse(_empty(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    placeholders = ",".join(["%s"] * len(auction_ids))
+    active_rows = query(
+        f"SELECT auction_id FROM auctions WHERE auction_id IN ({placeholders}) AND auction_status != 'completed'",
+        tuple(auction_ids)
+    )
+    active_ids = [r["auction_id"] for r in active_rows]
+
+    async def event_gen():
+        if not active_ids:
+            yield f"data: {json.dumps({'type': 'no_active'})}\n\n"
+            return
+
+        merged: asyncio.Queue = asyncio.Queue()
+        per_auction_queues: dict[str, asyncio.Queue] = {}
+
+        for aid in active_ids:
+            q: asyncio.Queue = asyncio.Queue()
+            per_auction_queues[aid] = q
+            listener.subscribe_queue(aid, q)
+
+        async def drain(aid, q):
+            while True:
+                event = await q.get()
+                await merged.put((aid, event))
+                if event.get("type") == "ended":
+                    break
+
+        tasks = [asyncio.create_task(drain(aid, q)) for aid, q in per_auction_queues.items()]
+
+        # Snapshot current state for each active auction
+        for aid in active_ids:
+            vehicle_rows = query(
+                "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = %s", (aid,)
+            )
+            for r in vehicle_rows:
+                if r["item_key"] and r["current_bid"] is not None:
+                    yield f"data: {json.dumps({'type': 'bid', 'auction_id': aid, 'item_key': r['item_key'], 'amount': r['current_bid'], 'expires': r['bid_expiration']})}\n\n"
+
+        remaining = set(active_ids)
+        try:
+            while remaining:
+                aid, event = await merged.get()
+                yield f"data: {json.dumps({**event, 'auction_id': aid})}\n\n"
+                if event.get("type") == "ended":
+                    remaining.discard(aid)
+        finally:
+            for task in tasks:
+                task.cancel()
+            for aid, q in per_auction_queues.items():
+                listener.unsubscribe_queue(aid, q)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/stream/auction/{auction_id}", tags=["stream"])
 async def stream_auction_bids(auction_id: str):
     """

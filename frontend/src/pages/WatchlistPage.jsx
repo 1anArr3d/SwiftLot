@@ -53,31 +53,22 @@ const WatchlistPage = () => {
     });
   }, [vehicles]);
 
-  // Live bid updates for active auctions in garage
+  // Live bid updates via single multi-stream connection (one SSE per user, not per auction)
+  const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');
   useEffect(() => {
-    if (!vehicles.length) return;
-    const activeAuctionIds = [...new Set(
-      vehicles.filter(v => v.auction_id).map(v => v.auction_id)
-    )];
-    const sources = activeAuctionIds.map(auctionId => {
-      const source = new EventSource(`${API}/stream/auction/${auctionId}`);
-      source.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'bid') {
-          setVehicles(prev => prev.map(v =>
-            v.item_key === msg.item_key
-              ? { ...v, current_bid: msg.amount }
-              : v
-          ));
-        } else if (msg.type === 'ended') {
-          source.close();
-        }
-      };
-      source.onerror = () => source.close();
-      return source;
-    });
-    return () => sources.forEach(s => s.close());
-  }, [vehicles.length]);
+    if (!auctionIdKey) return;
+    const source = new EventSource(`${API}/stream/multi?auctions=${auctionIdKey}`);
+    source.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'bid') {
+        setVehicles(prev => prev.map(v =>
+          v.item_key === msg.item_key ? { ...v, current_bid: msg.amount } : v
+        ));
+      }
+    };
+    source.onerror = () => source.close();
+    return () => source.close();
+  }, [auctionIdKey]);
 
   const handleRemove = async (e, vin) => {
     e.stopPropagation();

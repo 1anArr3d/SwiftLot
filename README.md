@@ -129,6 +129,7 @@ App at `http://localhost:5173`
 | POST | `/api/v1/saved-auctions/:id` | Save an auction (auth required) |
 | DELETE | `/api/v1/saved-auctions/:id` | Remove saved auction (auth required) |
 | GET | `/api/v1/stream/auction/:id` | SSE stream of live bid updates for an auction |
+| GET | `/api/v1/stream/multi?auctions=id1,id2` | Single SSE connection for multiple auctions (garage page) |
 | GET | `/api/v1/health` | Listener health — active subscriptions and dead threads |
 | POST | `/api/v1/discovery/run` | Run auction discovery (admin only) |
 | POST | `/api/v1/scrape/:id` | Manually trigger auction scrape (admin only) |
