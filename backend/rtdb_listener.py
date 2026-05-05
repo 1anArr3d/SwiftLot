@@ -1,9 +1,14 @@
 """
 RTDB SSE Listener — subscribes to Firebase RTDB at the region level.
 
-Two threads per region (instead of two per auction):
-  - auction thread: watches /{region}/auctions for all status/ended changes
-  - results thread: watches /{region}/results for all bid updates
+Two threads per region:
+  - auction thread: watches /{region}/auctions for status/ended changes
+  - results thread: watches /{region}/results for bid updates
+
+Event-driven triggers (after initial dump):
+  - Unknown auction_id in auction stream  → discover + scrape
+  - Unknown item_key in results stream    → rescrape that auction
+  - next_retry_at due in auctions table   → rescrape (checked every 5 min)
 """
 import json
 import threading
@@ -22,7 +27,15 @@ _region_lock = threading.Lock()
 # Per-auction SSE client queues for zero-latency fan-out
 _queues: dict = {}  # auction_id -> set of asyncio.Queue
 _queues_lock = threading.Lock()
-_loop = None  # set once on startup via set_event_loop()
+_loop = None
+
+# Tracks which regions have finished their initial dump (safe to trigger events after)
+_auctions_ready: set = set()
+_results_ready: set = set()
+
+# Prevents concurrent scrapes of the same auction
+_scraping: set = set()
+_scraping_lock = threading.Lock()
 
 
 def set_event_loop(loop):
@@ -81,6 +94,63 @@ def handle_auction_completed(auction_id: str, region_id: str):
         conn.execute("DELETE FROM vehicles WHERE auction_id = %s", (auction_id,))
 
 
+# ── Event-driven scrape triggers ───────────────────────────────────────────────
+
+def _trigger_scrape(auction_id: str, region_id: str):
+    """Scrape a single auction. Sets next_retry_at if 0 vehicles returned."""
+    import auction_scraper as scraper
+    import inspection_scraper as inspection
+
+    with _scraping_lock:
+        if auction_id in _scraping:
+            return
+        _scraping.add(auction_id)
+    try:
+        count = scraper.scrape_data(auction_id, region_id)
+        with get_db() as conn:
+            if count == 0:
+                conn.execute(
+                    "UPDATE auctions SET next_retry_at = NOW() + INTERVAL '15 minutes' WHERE auction_id = %s",
+                    (auction_id,)
+                )
+                print(f"[listener] {auction_id} has 0 vehicles — retry in 15 min")
+            else:
+                conn.execute(
+                    "UPDATE auctions SET vehicles_listed = %s, last_scraped_at = NOW(), next_retry_at = NULL WHERE auction_id = %s",
+                    (count, auction_id)
+                )
+                if region_id and region_id.endswith('-TX'):
+                    rows = query(
+                        "SELECT vin FROM vehicles WHERE auction_id = %s AND last_recorded_odo IS NULL",
+                        (auction_id,)
+                    )
+                    vins = [r["vin"] for r in rows]
+                    if vins:
+                        print(f"[listener] Firing TX inspection for {len(vins)} VINs in {auction_id}")
+                        threading.Thread(
+                            target=inspection.run_inspection_batch,
+                            args=(vins,), daemon=True
+                        ).start()
+    except Exception as e:
+        print(f"[listener] scrape error for {auction_id}: {e}")
+    finally:
+        with _scraping_lock:
+            _scraping.discard(auction_id)
+
+
+def _trigger_discover_and_scrape(region_id: str, auction_id: str):
+    """Discover all auctions in a region then scrape the new one."""
+    import auction_discovery as discovery
+
+    try:
+        discovery.discover_region(region_id)
+        row = query("SELECT auction_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
+        if row:
+            _trigger_scrape(auction_id, region_id)
+    except Exception as e:
+        print(f"[listener] discover+scrape error for {region_id}/{auction_id}: {e}")
+
+
 # ── Region-level SSE stream handlers ──────────────────────────────────────────
 
 def _process_auction_update(auction_id: str, region_id: str, auction_data: dict):
@@ -92,7 +162,6 @@ def _process_auction_update(auction_id: str, region_id: str, auction_data: dict)
     paused = auction_data.get("paused")
 
     if ended:
-        # Guard against reprocessing already-completed auctions (e.g. initial dump)
         row = query("SELECT auction_status FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
         if row and row["auction_status"] != "completed":
             _broadcast(auction_id, {"type": "ended"})
@@ -150,14 +219,24 @@ def _stream_region_auctions(region_id: str, stop: threading.Event):
                     parts = [p for p in path.split("/") if p]
 
                     if len(parts) == 0 and isinstance(inner, dict):
-                        # Initial full dump: {auction_id: {ended, startItem, ...}}
+                        # Initial full dump — sync state, mark region ready
                         for auction_id, auction_data in inner.items():
                             _process_auction_update(auction_id, region_id, auction_data)
+                        _auctions_ready.add(region_id)
                     elif len(parts) == 1:
-                        # Single auction replaced entirely
-                        _process_auction_update(parts[0], region_id, inner if isinstance(inner, dict) else {})
+                        auction_id = parts[0]
+                        # After initial dump: check for brand new auctions
+                        if region_id in _auctions_ready and isinstance(inner, dict):
+                            row = query("SELECT auction_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
+                            if not row:
+                                print(f"[listener] New auction detected: {region_id}/{auction_id}")
+                                threading.Thread(
+                                    target=_trigger_discover_and_scrape,
+                                    args=(region_id, auction_id),
+                                    daemon=True
+                                ).start()
+                        _process_auction_update(auction_id, region_id, inner if isinstance(inner, dict) else {})
                     elif len(parts) == 2:
-                        # Single field update: /auction_id/field = value
                         _process_auction_update(parts[0], region_id, {parts[1]: inner})
 
         except Exception as e:
@@ -202,9 +281,11 @@ def _stream_region_results(region_id: str, stop: threading.Event):
                     inner = data.get("data")
                     parts = [p for p in path.split("/") if p]
                     updates = []  # (auction_id, item_key, amount, expiration)
+                    is_initial = False
 
                     if len(parts) == 0 and isinstance(inner, dict):
-                        # Initial full dump: {auction_id: {item_key: {amount, expiration}}}
+                        # Initial full dump — sync bids only, mark region ready
+                        is_initial = True
                         for auction_id, items in inner.items():
                             if not isinstance(items, dict):
                                 continue
@@ -214,8 +295,8 @@ def _stream_region_results(region_id: str, stop: threading.Event):
                                 amount = result.get("amount")
                                 if amount is not None:
                                     updates.append((auction_id, item_key, amount, result.get("expiration")))
+                        _results_ready.add(region_id)
                     elif len(parts) == 1 and isinstance(inner, dict):
-                        # All items for one auction: {item_key: {amount, expiration}}
                         auction_id = parts[0]
                         for item_key, result in inner.items():
                             if not isinstance(result, dict):
@@ -224,13 +305,11 @@ def _stream_region_results(region_id: str, stop: threading.Event):
                             if amount is not None:
                                 updates.append((auction_id, item_key, amount, result.get("expiration")))
                     elif len(parts) == 2 and isinstance(inner, dict):
-                        # Single item update: /auction_id/item_key = {amount, expiration}
                         auction_id, item_key = parts[0], parts[1]
                         amount = inner.get("amount")
                         if amount is not None:
                             updates.append((auction_id, item_key, amount, inner.get("expiration")))
                     elif len(parts) == 3:
-                        # Field-level patch: /auction_id/item_key/field = value
                         auction_id, item_key, field = parts[0], parts[1], parts[2]
                         if field == "amount" and inner is not None:
                             updates.append((auction_id, item_key, inner, None))
@@ -251,6 +330,22 @@ def _stream_region_results(region_id: str, stop: threading.Event):
                                     )
                         for auction_id, item_key, amount, expiration in updates:
                             _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
+
+                        # After initial dump: check for item_keys we don't have — means a new car was added
+                        if not is_initial and region_id in _results_ready:
+                            auctions_to_rescrape = set()
+                            for auction_id, item_key, _, _ in updates:
+                                if item_key:
+                                    row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
+                                    if not row:
+                                        print(f"[listener] Unknown item_key {item_key} in {auction_id} — triggering rescrape")
+                                        auctions_to_rescrape.add((auction_id, region_id))
+                            for aid, rid in auctions_to_rescrape:
+                                threading.Thread(
+                                    target=_trigger_scrape,
+                                    args=(aid, rid),
+                                    daemon=True
+                                ).start()
 
         except Exception as e:
             if stop.is_set():
@@ -295,6 +390,8 @@ def unsubscribe_region(region_id: str):
         sub = _region_subscriptions.pop(region_id, None)
     if sub:
         sub["stop"].set()
+        _auctions_ready.discard(region_id)
+        _results_ready.discard(region_id)
         print(f"[listener] unsubscribed region {region_id}")
 
 
@@ -383,3 +480,29 @@ def start_watchdog(interval: int = 30):
     t = threading.Thread(target=_watchdog, args=(interval,), daemon=True, name="rtdb-watchdog")
     t.start()
     print(f"[watchdog] started — checking every {interval}s")
+
+
+def _retry_checker():
+    """Every 5 min, rescrape auctions whose next_retry_at has passed."""
+    while True:
+        time.sleep(300)
+        try:
+            rows = query(
+                "SELECT auction_id, region_id FROM auctions WHERE next_retry_at <= NOW() AND auction_status != 'completed'"
+            )
+            for row in rows:
+                print(f"[retry] Retrying scrape for {row['auction_id']}")
+                threading.Thread(
+                    target=_trigger_scrape,
+                    args=(row["auction_id"], row["region_id"]),
+                    daemon=True
+                ).start()
+        except Exception as e:
+            print(f"[retry] Error: {e}")
+
+
+def start_retry_checker():
+    """Start the scrape retry checker. Call once on app startup."""
+    t = threading.Thread(target=_retry_checker, daemon=True, name="scrape-retry")
+    t.start()
+    print("[retry] Scrape retry checker started — checking every 5 min")
