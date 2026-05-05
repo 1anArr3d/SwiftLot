@@ -340,11 +340,12 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
                                 if item_key and item_key not in _rescrape_attempted:
                                     row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
                                     if not row:
+                                        # Mark before _scraping check so skipped items aren't retried next round
+                                        _rescrape_attempted.add(item_key)
                                         with _scraping_lock:
                                             if auction_id in _scraping:
                                                 break
                                             _scraping.add(auction_id)
-                                        _rescrape_attempted.add(item_key)
                                         print(f"[listener] Unknown item_key {item_key} in {auction_id} — triggering rescrape")
                                         threading.Thread(
                                             target=_trigger_scrape,
