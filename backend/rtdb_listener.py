@@ -42,6 +42,9 @@ _auctions_ready: set = set()
 _scraping: set = set()
 _scraping_lock = threading.Lock()
 
+# item_keys that have already triggered a rescrape; don't retry them even if still missing from DB
+_rescrape_attempted: set = set()
+
 
 def set_event_loop(loop):
     global _loop
@@ -334,13 +337,14 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
                         # After initial dump: unknown item_key means a new vehicle was added mid-auction
                         if not is_initial:
                             for item_key, _, _ in updates:
-                                if item_key:
+                                if item_key and item_key not in _rescrape_attempted:
                                     row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
                                     if not row:
                                         with _scraping_lock:
                                             if auction_id in _scraping:
                                                 break
                                             _scraping.add(auction_id)
+                                        _rescrape_attempted.add(item_key)
                                         print(f"[listener] Unknown item_key {item_key} in {auction_id} — triggering rescrape")
                                         threading.Thread(
                                             target=_trigger_scrape,
