@@ -256,9 +256,10 @@ async def stream_auction_bids(auction_id: str):
     No auth required — bids are public information.
     """
     async def event_gen():
-        last_bids: dict = {}
-        last_status: str | None = None
-        while True:
+        queue = asyncio.Queue()
+        listener.subscribe_queue(auction_id, queue)
+        try:
+            # Snapshot current state on connect so client isn't stale
             rows = query(
                 "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = %s",
                 (auction_id,)
@@ -267,26 +268,20 @@ async def stream_auction_bids(auction_id: str):
                 "SELECT auction_status FROM auctions WHERE auction_id = %s",
                 (auction_id,), one=True
             )
-            current_status = auction["auction_status"] if auction else None
-
-            # Emit bid changes
             for r in rows:
-                key = r["item_key"]
-                if key and r["current_bid"] != last_bids.get(key):
-                    yield f"data: {json.dumps({'type': 'bid', 'item_key': key, 'amount': r['current_bid'], 'expires': r['bid_expiration']})}\n\n"
-                    last_bids[key] = r["current_bid"]
+                if r["item_key"] and r["current_bid"] is not None:
+                    yield f"data: {json.dumps({'type': 'bid', 'item_key': r['item_key'], 'amount': r['current_bid'], 'expires': r['bid_expiration']})}\n\n"
+            if auction:
+                yield f"data: {json.dumps({'type': 'status', 'auction_status': auction['auction_status']})}\n\n"
 
-            # Emit status change
-            if current_status and current_status != last_status:
-                yield f"data: {json.dumps({'type': 'status', 'auction_status': current_status})}\n\n"
-                last_status = current_status
-
-            # Emit ended and stop
-            if current_status == "completed" and not rows:
-                yield f"data: {json.dumps({'type': 'ended'})}\n\n"
-                break
-
-            await asyncio.sleep(1)
+            # Stream events pushed by rtdb_listener — no polling, no sleep
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("type") == "ended":
+                    break
+        finally:
+            listener.unsubscribe_queue(auction_id, queue)
 
     return StreamingResponse(
         event_gen(),
@@ -341,11 +336,6 @@ def _run_discovery(key: str):
         discovery_status[key] = "failed"
 
 
-def _run_pipeline():
-    from scheduler import scheduled_discovery_and_scrape
-    scheduled_discovery_and_scrape()
-
-
 @router.post("/scrape/{auction_id}", tags=["jobs"])
 def start_scrape(auction_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
     row = query("SELECT region_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
@@ -397,5 +387,5 @@ def get_discovery_status(user_id: str = Depends(require_admin)):
 
 @router.post("/pipeline/run", tags=["jobs"])
 def run_full_pipeline(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
-    background_tasks.add_task(_run_pipeline)
+    background_tasks.add_task(_run_discovery, "global")
     return {"status": "started"}
