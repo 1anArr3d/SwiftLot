@@ -116,3 +116,23 @@ def run_discovery():
             mark_completed_auctions(conn, seen_ids)
 
     print(f"[discovery] Saved {len(active)} auctions. Done.")
+
+
+def discover_region(region_id: str):
+    """Refresh all auctions for a single region. Used by event-driven listener."""
+    try:
+        auctions = _discover_region(region_id)
+        active = [a for a in auctions if a["auction_status"] != "completed"]
+        seen_ids = {a["auction_id"] for a in active}
+        with get_db() as conn:
+            for a in active:
+                upsert_auction(conn, a)
+            if seen_ids:
+                placeholders = ','.join(['%s'] * len(seen_ids))
+                conn.execute(
+                    f"UPDATE auctions SET auction_status='completed' WHERE region_id = %s AND auction_id NOT IN ({placeholders})",
+                    [region_id] + list(seen_ids)
+                )
+        print(f"[discovery] [{region_id}] refreshed — {len(active)} active")
+    except Exception as e:
+        print(f"[discovery] [{region_id}] Error: {e}")

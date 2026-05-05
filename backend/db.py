@@ -174,6 +174,8 @@ def init_db():
             PRIMARY KEY (auction_id, user_id)
         )''')
 
+    conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP")
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_garage_user_id ON garage (user_id)")

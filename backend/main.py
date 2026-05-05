@@ -8,11 +8,11 @@ from slowapi.errors import RateLimitExceeded
 from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
-from scheduler import create_scheduler, scheduled_discovery_and_scrape
 import historical_harvester as harvester
 
 from routes import router
 import rtdb_listener as listener
+import asyncio
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
@@ -20,28 +20,19 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    listener.set_event_loop(asyncio.get_running_loop())
 
-    threading.Thread(target=_seed_historical, daemon=True).start()
+    # One-time catch-up for auctions that ended while the server was down
+    threading.Thread(target=harvester.harvest_api, daemon=True).start()
 
-    # Subscribe to auctions already in DB immediately
+    # Subscribe to all active regions immediately
     threading.Thread(target=listener.sync_with_db, daemon=True).start()
     listener.start_watchdog(interval=30)
-    # Run pipeline in background so DB is fresh after any restart
-    threading.Thread(target=scheduled_discovery_and_scrape, daemon=True).start()
-
-    scheduler = create_scheduler()
-    scheduler.start()
-    print("[scheduler] Started — jobs at 8am, 12pm, 4pm, 8pm, 12am CT")
+    listener.start_retry_checker()
 
     yield
 
-    scheduler.shutdown(wait=False)
-    print("[scheduler] Stopped.")
-
-
-def _seed_historical():
-    harvester.seed_from_json()
-    harvester.harvest_api()
+    print("[app] Shutting down.")
 
 
 app = FastAPI(
