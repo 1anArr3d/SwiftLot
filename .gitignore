@@ -23,6 +23,7 @@ node_modules/
 # Environment
 .env
 .env.local
+backend.env
 
 # Firebase service account key — never commit
 *serviceAccountKey*.json
