@@ -51,7 +51,7 @@ const WatchlistPage = () => {
       results.forEach(r => { if (r && r[1].count > 0) map[r[0]] = r[1]; });
       setHistStats(map);
     });
-  }, [vehicles]);
+  }, [vehicles.length]);
 
   // Live bid updates via single multi-stream connection (one SSE per user, not per auction)
   const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');

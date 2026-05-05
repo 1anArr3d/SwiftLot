@@ -74,6 +74,8 @@ def handle_auction_completed(auction_id: str, region_id: str):
     """
     print(f"[listener] {auction_id} ended — running snapshot")
 
+    # Brief wait so the results thread can flush any in-flight final bids before we read current_bid
+    time.sleep(2)
     harvester.harvest_auction(region_id, auction_id)
 
     with get_db() as conn:
