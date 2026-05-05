@@ -103,7 +103,7 @@ const AuctionDetailPage = () => {
       results.forEach(r => { if (r && r[1].count > 0) map[r[0]] = r[1]; });
       setHistStats(map);
     });
-  }, [vehicles]);
+  }, [vehicles.length]);
 
   const parseOdo = (odoStr) => {
     if (!odoStr) return null;
