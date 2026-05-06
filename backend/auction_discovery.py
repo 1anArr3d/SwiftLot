@@ -34,6 +34,7 @@ def upsert_auction(conn, record: dict):
             sales_tax       = EXCLUDED.sales_tax,
             ended_at        = EXCLUDED.ended_at,
             closes_at       = EXCLUDED.closes_at
+            -- vehicles_listed intentionally excluded: owned by the scraper, not discovery
     ''', (
         record["auction_id"],
         record["region_id"],
@@ -47,15 +48,6 @@ def upsert_auction(conn, record: dict):
         record.get("ended_at"),
         record.get("closes_at"),
     ))
-
-
-def mark_completed_auctions(conn, seen_ids: set):
-    """Any active auction not seen in this run gets marked completed."""
-    placeholders = ','.join(['%s'] * len(seen_ids))
-    conn.execute(
-        f"UPDATE auctions SET auction_status='completed' WHERE auction_id NOT IN ({placeholders})",
-        list(seen_ids)
-    )
 
 
 def _discover_region(region_id: str) -> list[dict]:
@@ -74,8 +66,8 @@ def _discover_region(region_id: str) -> list[dict]:
             ended = bool(auction.get("ended"))
             settings = auction.get("settings") or {}
             auction_type = settings.get("auctionType", "")
-            # SEQUENCE auctions close after a live start event; LISTING auctions have an expiration
-            closes_at = settings.get("startEvent") if auction_type == "SEQUENCE" else settings.get("expiration")
+            # SEQUENCE close is auctioneer-controlled (no fixed deadline); LISTING auctions have an expiration
+            closes_at = None if auction_type == "SEQUENCE" else settings.get("expiration")
             auctions.append({
                 "auction_id":     auction_id,
                 "region_id":      region_id,
@@ -95,27 +87,41 @@ def run_discovery():
     region_ids = autura_api.get_active_region_ids()
     print(f"[discovery] {len(region_ids)} active regions: {region_ids}")
 
-    all_auctions = []
+    # region_id -> list of active auction dicts (only for regions that succeeded)
+    succeeded: dict[str, list[dict]] = {}
     for rid in region_ids:
         try:
             auctions = _discover_region(rid)
             print(f"[discovery] [{rid}] {len(auctions)} auctions")
-            all_auctions.extend(auctions)
+            active = [a for a in auctions if a["auction_status"] != "completed"]
+            succeeded[rid] = active
         except Exception as e:
             print(f"[discovery] [{rid}] Error: {e}")
 
-    active = [a for a in all_auctions if a["auction_status"] != "completed"]
-    print(f"[discovery] {len(all_auctions)} total, {len(active)} active")
+    total_active = sum(len(v) for v in succeeded.values())
+    print(f"[discovery] {len(succeeded)}/{len(region_ids)} regions OK, {total_active} active auctions")
 
-    seen_ids = {a["auction_id"] for a in active}
     with get_db() as conn:
-        # Only store active auctions — no point keeping completed ones
-        for a in active:
-            upsert_auction(conn, a)
-        if seen_ids:
-            mark_completed_auctions(conn, seen_ids)
+        for rid, active in succeeded.items():
+            for a in active:
+                upsert_auction(conn, a)
+            # Only sweep completions for regions we successfully fetched — a failed
+            # API call for a region must not mark its auctions completed.
+            seen_ids = {a["auction_id"] for a in active}
+            placeholders = ','.join(['%s'] * len(seen_ids)) if seen_ids else None
+            if placeholders:
+                conn.execute(
+                    f"UPDATE auctions SET auction_status='completed'"
+                    f" WHERE region_id = %s AND auction_id NOT IN ({placeholders})",
+                    [rid] + list(seen_ids),
+                )
+            else:
+                conn.execute(
+                    "UPDATE auctions SET auction_status='completed' WHERE region_id = %s",
+                    [rid],
+                )
 
-    print(f"[discovery] Saved {len(active)} auctions. Done.")
+    print(f"[discovery] Saved {total_active} auctions. Done.")
 
 
 def discover_region(region_id: str):

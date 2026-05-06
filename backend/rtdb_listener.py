@@ -43,21 +43,32 @@ _auction_items_lock = threading.Lock()
 _queues: dict = {}  # auction_id -> set of asyncio.Queue
 _queues_lock = threading.Lock()
 _loop = None
+_pending_broadcasts: list = []  # [(auction_id, event)] buffered until event loop is ready
+_pending_broadcasts_lock = threading.Lock()
 
 # Tracks which regions have finished their initial dump (safe to trigger events after)
 _auctions_ready: set = set()
+_auctions_ready_lock = threading.Lock()
 
 # Prevents concurrent scrapes of the same auction
 _scraping: set = set()
 _scraping_lock = threading.Lock()
 
-# item_keys that have already triggered a rescrape; don't retry them even if still missing from DB
+# (auction_id, item_key) pairs that have already triggered a rescrape; pruned on auction completion
 _rescrape_attempted: set = set()
 
 
 def set_event_loop(loop):
     global _loop
     _loop = loop
+    with _pending_broadcasts_lock:
+        pending = list(_pending_broadcasts)
+        _pending_broadcasts.clear()
+    for auction_id, event in pending:
+        with _queues_lock:
+            queues = set(_queues.get(auction_id, set()))
+        for q in queues:
+            _loop.call_soon_threadsafe(q.put_nowait, event)
 
 
 def subscribe_queue(auction_id: str, queue):
@@ -75,11 +86,30 @@ def unsubscribe_queue(auction_id: str, queue):
 
 def _broadcast(auction_id: str, event: dict):
     if _loop is None:
+        with _pending_broadcasts_lock:
+            _pending_broadcasts.append((auction_id, event))
         return
     with _queues_lock:
         queues = set(_queues.get(auction_id, set()))
     for q in queues:
         _loop.call_soon_threadsafe(q.put_nowait, event)
+
+
+def _iter_sse(resp):
+    """Yield (event_type, payload) pairs from a Firebase REST SSE response.
+
+    Tracks event: lines so callers can detect auth_revoked and cancel.
+    Defaults to "put" when no event: line precedes a data: line.
+    """
+    current_event = "put"
+    for raw in resp.iter_lines():
+        line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        if line.startswith("event:"):
+            current_event = line[6:].strip()
+        elif line.startswith("data:"):
+            payload = line[5:].strip()
+            yield current_event, payload
+            current_event = "put"
 
 
 # ── Snapshot + cleanup ─────────────────────────────────────────────────────────
@@ -91,12 +121,10 @@ def handle_auction_completed(auction_id: str, region_id: str):
     """
     print(f"[listener] {auction_id} ended — running snapshot")
 
-    # Brief wait so the results thread can flush any in-flight final bids before we read current_bid
-    time.sleep(2)
-    harvester.harvest_auction(region_id, auction_id)
-
     unsubscribe_auction_results(auction_id)
     unsubscribe_auction_items(auction_id)
+    _rescrape_attempted.difference_update({k for k in _rescrape_attempted if k[0] == auction_id})
+    harvester.harvest_auction(region_id, auction_id)
 
     with get_db() as conn:
         conn.execute("""
@@ -199,24 +227,12 @@ def _process_auction_update(auction_id: str, region_id: str, auction_data: dict)
     if not isinstance(auction_data, dict):
         return
     ended = auction_data.get("ended", False)
-    start_item = auction_data.get("startItem")
-    paused = auction_data.get("paused")
 
     if ended:
         row = query("SELECT auction_status FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
         if row and row["auction_status"] != "completed":
             _broadcast(auction_id, {"type": "ended"})
             handle_auction_completed(auction_id, region_id)
-    elif start_item:
-        status = "paused" if paused == "paused" else "live"
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE auctions SET auction_status = %s WHERE auction_id = %s",
-                (status, auction_id)
-            )
-        _broadcast(auction_id, {"type": "status", "auction_status": status})
-        subscribe_auction_results(region_id, auction_id)
-        subscribe_auction_items(region_id, auction_id)
     else:
         with get_db() as conn:
             conn.execute(
@@ -241,15 +257,12 @@ def _stream_region_auctions(region_id: str, stop: threading.Event):
                 stream=True,
                 timeout=300,
             ) as resp:
-                for raw in resp.iter_lines():
+                for event_type, payload in _iter_sse(resp):
                     if stop.is_set():
                         return
-                    if not raw:
-                        continue
-                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
+                    if event_type in ("auth_revoked", "cancel"):
+                        print(f"[listener] auctions {region_id}: {event_type} — reconnecting")
+                        break
                     if not payload or payload == "null":
                         continue
                     try:
@@ -267,11 +280,14 @@ def _stream_region_auctions(region_id: str, stop: threading.Event):
                         # Initial full dump — sync state, mark region ready
                         for auction_id, auction_data in inner.items():
                             _process_auction_update(auction_id, region_id, auction_data)
-                        _auctions_ready.add(region_id)
+                        with _auctions_ready_lock:
+                            _auctions_ready.add(region_id)
                     elif len(parts) == 1:
                         auction_id = parts[0]
                         # After initial dump: check for brand new auctions
-                        if region_id in _auctions_ready and isinstance(inner, dict):
+                        with _auctions_ready_lock:
+                            ready = region_id in _auctions_ready
+                        if ready and isinstance(inner, dict):
                             row = query("SELECT auction_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
                             if not row:
                                 print(f"[listener] New auction detected: {region_id}/{auction_id}")
@@ -305,15 +321,12 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
                 stream=True,
                 timeout=300,
             ) as resp:
-                for raw in resp.iter_lines():
+                for event_type, payload in _iter_sse(resp):
                     if stop.is_set():
                         return
-                    if not raw:
-                        continue
-                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
+                    if event_type in ("auth_revoked", "cancel"):
+                        print(f"[listener] results {auction_id}: {event_type} — reconnecting")
+                        break
                     if not payload or payload == "null":
                         continue
                     try:
@@ -343,36 +356,43 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
                         if amount is not None:
                             updates.append((item_key, amount, inner.get("expiration")))
                     elif len(parts) == 2:
-                        # Field-level update: amount scalar
                         item_key, field = parts[0], parts[1]
                         if field == "amount" and inner is not None:
                             updates.append((item_key, inner, None))
+                        elif field == "expiration" and inner is not None:
+                            updates.append((item_key, None, inner))
 
                     if updates:
-                        print(f"[listener] {auction_id} bid update — {len(updates)} item(s): {[(k, a) for k, a, _ in updates[:5]]}")
+                        print(f"[listener] {auction_id} bid update — {len(updates)} item(s): {[(k, a) for k, a, _ in updates if a is not None][:5]}")
                         with get_db() as conn:
                             for item_key, amount, expiration in updates:
-                                if expiration is not None:
+                                if amount is not None and expiration is not None:
                                     conn.execute(
                                         "UPDATE vehicles SET current_bid = %s, bid_expiration = %s WHERE item_key = %s",
                                         (amount, expiration, item_key)
                                     )
-                                else:
+                                elif amount is not None:
                                     conn.execute(
                                         "UPDATE vehicles SET current_bid = %s WHERE item_key = %s",
                                         (amount, item_key)
                                     )
+                                elif expiration is not None:
+                                    conn.execute(
+                                        "UPDATE vehicles SET bid_expiration = %s WHERE item_key = %s",
+                                        (expiration, item_key)
+                                    )
                         for item_key, amount, expiration in updates:
-                            _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
+                            if amount is not None:
+                                _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
 
                         # After initial dump: unknown item_key means a new vehicle was added mid-auction
                         if not is_initial:
                             for item_key, _, _ in updates:
-                                if item_key and item_key not in _rescrape_attempted:
+                                if item_key and (auction_id, item_key) not in _rescrape_attempted:
                                     row = query("SELECT vin FROM vehicles WHERE item_key = %s", (item_key,), one=True)
                                     if not row:
                                         # Mark before _scraping check so skipped items aren't retried next round
-                                        _rescrape_attempted.add(item_key)
+                                        _rescrape_attempted.add((auction_id, item_key))
                                         with _scraping_lock:
                                             if auction_id in _scraping:
                                                 break
@@ -439,15 +459,12 @@ def _stream_auction_items(region_id: str, auction_id: str, stop: threading.Event
                 stream=True,
                 timeout=300,
             ) as resp:
-                for raw in resp.iter_lines():
+                for event_type, payload in _iter_sse(resp):
                     if stop.is_set():
                         return
-                    if not raw:
-                        continue
-                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
+                    if event_type in ("auth_revoked", "cancel"):
+                        print(f"[listener] items {auction_id}: {event_type} — reconnecting")
+                        break
                     if not payload or payload == "null":
                         continue
                     try:
@@ -564,7 +581,8 @@ def unsubscribe_region(region_id: str):
         sub = _region_subscriptions.pop(region_id, None)
     if sub:
         sub["stop"].set()
-        _auctions_ready.discard(region_id)
+        with _auctions_ready_lock:
+            _auctions_ready.discard(region_id)
         print(f"[listener] unsubscribed region {region_id}")
     # Stop per-auction result and items threads that belong to this region
     with _auction_result_lock:
