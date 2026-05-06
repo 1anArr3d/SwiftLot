@@ -4,8 +4,13 @@ RTDB SSE Listener — subscribes to Firebase RTDB at the region/auction level.
 One thread per region for auction lifecycle:
   - auction thread: watches /{region}/auctions for status/ended changes
 
-One thread per active auction for bids:
-  - results thread: watches /{region}/results/{auction_id} for bid updates
+Two threads per active auction for bids:
+  - results thread: watches /{region}/results/{auction_id} — timed/pre-auction bids
+  - items thread:   watches /{region}/items/{auction_id}   — live auctioneer bids
+
+Both bid streams update the DB and broadcast to SSE clients. The items stream
+skips its initial dump (results stream already provides current state) and only
+processes incremental currentResult/amount updates from the live auctioneer phase.
 
 Event-driven triggers (after initial dump):
   - Unknown auction_id in auction stream  → discover + scrape
@@ -29,6 +34,10 @@ _region_lock = threading.Lock()
 # auction_id -> {"thread": Thread, "stop": Event, "region_id": str}
 _auction_result_subscriptions: dict = {}
 _auction_result_lock = threading.Lock()
+
+# auction_id -> {"thread": Thread, "stop": Event, "region_id": str}
+_auction_items_subscriptions: dict = {}
+_auction_items_lock = threading.Lock()
 
 # Per-auction SSE client queues for zero-latency fan-out
 _queues: dict = {}  # auction_id -> set of asyncio.Queue
@@ -87,6 +96,7 @@ def handle_auction_completed(auction_id: str, region_id: str):
     harvester.harvest_auction(region_id, auction_id)
 
     unsubscribe_auction_results(auction_id)
+    unsubscribe_auction_items(auction_id)
 
     with get_db() as conn:
         conn.execute("""
@@ -117,11 +127,30 @@ def _trigger_scrape(auction_id: str, region_id: str):
         count = scraper.scrape_data(auction_id, region_id)
         with get_db() as conn:
             if count == 0:
-                conn.execute(
-                    "UPDATE auctions SET next_retry_at = NOW() + INTERVAL '15 minutes' WHERE auction_id = %s",
-                    (auction_id,)
+                # Exponential backoff: 15m, 30m, 1h, 2h, 4h, then stop after 4h interval
+                row = query(
+                    "SELECT next_retry_at, last_scraped_at FROM auctions WHERE auction_id = %s",
+                    (auction_id,), one=True
                 )
-                print(f"[listener] {auction_id} has 0 vehicles — retry in 15 min")
+                # Estimate attempt count from how long we've been retrying (rough but no counter column needed)
+                import math
+                prev_interval_minutes = 15
+                if row and row["last_scraped_at"] and row["next_retry_at"]:
+                    delta = (row["next_retry_at"] - row["last_scraped_at"]).total_seconds() / 60
+                    prev_interval_minutes = max(15, min(int(delta), 240))
+                next_interval_minutes = min(prev_interval_minutes * 2, 240)
+                if prev_interval_minutes >= 240:
+                    conn.execute(
+                        "UPDATE auctions SET next_retry_at = NULL, last_scraped_at = NOW() WHERE auction_id = %s",
+                        (auction_id,)
+                    )
+                    print(f"[listener] {auction_id} has 0 vehicles — giving up after max retries")
+                else:
+                    conn.execute(
+                        "UPDATE auctions SET next_retry_at = NOW() + (%s * INTERVAL '1 minute'), last_scraped_at = NOW() WHERE auction_id = %s",
+                        (next_interval_minutes, auction_id)
+                    )
+                    print(f"[listener] {auction_id} has 0 vehicles — retry in {next_interval_minutes} min")
             else:
                 conn.execute(
                     "UPDATE auctions SET vehicles_listed = %s, last_scraped_at = NOW(), next_retry_at = NULL WHERE auction_id = %s",
@@ -187,6 +216,7 @@ def _process_auction_update(auction_id: str, region_id: str, auction_data: dict)
             )
         _broadcast(auction_id, {"type": "status", "auction_status": status})
         subscribe_auction_results(region_id, auction_id)
+        subscribe_auction_items(region_id, auction_id)
     else:
         with get_db() as conn:
             conn.execute(
@@ -195,6 +225,7 @@ def _process_auction_update(auction_id: str, region_id: str, auction_data: dict)
             )
         _broadcast(auction_id, {"type": "status", "auction_status": "active"})
         subscribe_auction_results(region_id, auction_id)
+        subscribe_auction_items(region_id, auction_id)
 
 
 def _stream_region_auctions(region_id: str, stop: threading.Event):
@@ -389,6 +420,122 @@ def unsubscribe_auction_results(auction_id: str):
         print(f"[listener] unsubscribed results for {auction_id}")
 
 
+def _stream_auction_items(region_id: str, auction_id: str, stop: threading.Event):
+    """Watch /{region}/items/{auction_id} for live auctioneer bid updates.
+
+    The items path carries currentResult/amount updates during the live auctioneer
+    phase. The initial dump is skipped (results stream provides current state);
+    only incremental updates are processed.
+    """
+    url = f"{_RTDB}/{region_id}/items/{auction_id}.json"
+    while not stop.is_set():
+        is_initial = True
+        token = autura_api.get_token()
+        try:
+            with requests.get(
+                url,
+                params={"auth": token},
+                headers={"Accept": "text/event-stream"},
+                stream=True,
+                timeout=300,
+            ) as resp:
+                for raw in resp.iter_lines():
+                    if stop.is_set():
+                        return
+                    if not raw:
+                        continue
+                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload or payload == "null":
+                        continue
+                    try:
+                        data = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+
+                    if is_initial:
+                        is_initial = False
+                        continue  # skip large initial dump; results stream has current state
+
+                    path = data.get("path", "/")
+                    inner = data.get("data")
+                    parts = [p for p in path.split("/") if p]
+                    updates = []  # (item_key, amount, expiration)
+
+                    if len(parts) == 1 and isinstance(inner, dict):
+                        # item-level update: {currentResult: {amount: N, ...}, info: {...}, ...}
+                        item_key = parts[0]
+                        result = inner.get("currentResult")
+                        if isinstance(result, dict):
+                            amount = result.get("amount")
+                            if amount is not None:
+                                updates.append((item_key, amount, result.get("expiration")))
+                    elif len(parts) == 2 and parts[1] == "currentResult" and isinstance(inner, dict):
+                        # currentResult-level update: {amount: N, expiration: ..., ...}
+                        item_key = parts[0]
+                        amount = inner.get("amount")
+                        if amount is not None:
+                            updates.append((item_key, amount, inner.get("expiration")))
+                    elif len(parts) >= 3 and parts[1] == "currentResult" and parts[2] == "amount":
+                        # amount field update: N
+                        item_key = parts[0]
+                        if inner is not None:
+                            updates.append((item_key, inner, None))
+
+                    if updates:
+                        print(f"[listener] {auction_id} live bid — {len(updates)} item(s): {[(k, a) for k, a, _ in updates[:5]]}")
+                        with get_db() as conn:
+                            for item_key, amount, expiration in updates:
+                                if expiration is not None:
+                                    conn.execute(
+                                        "UPDATE vehicles SET current_bid = %s, bid_expiration = %s WHERE item_key = %s",
+                                        (amount, expiration, item_key)
+                                    )
+                                else:
+                                    conn.execute(
+                                        "UPDATE vehicles SET current_bid = %s WHERE item_key = %s",
+                                        (amount, item_key)
+                                    )
+                        for item_key, amount, expiration in updates:
+                            _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
+
+        except Exception as e:
+            if stop.is_set():
+                return
+            print(f"[listener] items error {auction_id}: {e} — reconnecting in 5s")
+            time.sleep(5)
+
+
+def subscribe_auction_items(region_id: str, auction_id: str):
+    """Start per-auction items SSE thread for live auctioneer bids. No-op if already subscribed."""
+    with _auction_items_lock:
+        if auction_id in _auction_items_subscriptions:
+            return
+        stop = threading.Event()
+        t = threading.Thread(
+            target=_stream_auction_items,
+            args=(region_id, auction_id, stop),
+            daemon=True,
+            name=f"rtdb-items-{auction_id}",
+        )
+        _auction_items_subscriptions[auction_id] = {"thread": t, "stop": stop, "region_id": region_id}
+        t.start()
+        print(f"[listener] subscribed items for {auction_id}")
+
+
+def unsubscribe_auction_items(auction_id: str):
+    """Stop the items SSE thread for a specific auction."""
+    with _auction_items_lock:
+        sub = _auction_items_subscriptions.pop(auction_id, None)
+    if sub:
+        sub["stop"].set()
+        print(f"[listener] unsubscribed items for {auction_id}")
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def subscribe_region(region_id: str):
@@ -419,13 +566,19 @@ def unsubscribe_region(region_id: str):
         sub["stop"].set()
         _auctions_ready.discard(region_id)
         print(f"[listener] unsubscribed region {region_id}")
-    # Stop per-auction result threads that belong to this region
+    # Stop per-auction result and items threads that belong to this region
     with _auction_result_lock:
         to_stop = [aid for aid, s in _auction_result_subscriptions.items() if s["region_id"] == region_id]
         for aid in to_stop:
             _auction_result_subscriptions.pop(aid)["stop"].set()
     if to_stop:
         print(f"[listener] unsubscribed results for {len(to_stop)} auctions in {region_id}")
+    with _auction_items_lock:
+        to_stop_items = [aid for aid, s in _auction_items_subscriptions.items() if s["region_id"] == region_id]
+        for aid in to_stop_items:
+            _auction_items_subscriptions.pop(aid)["stop"].set()
+    if to_stop_items:
+        print(f"[listener] unsubscribed items for {len(to_stop_items)} auctions in {region_id}")
 
 
 def active_regions() -> set:
@@ -454,13 +607,18 @@ def sync_with_db():
 
     for auction_id, region_id in db_auctions.items():
         subscribe_auction_results(region_id, auction_id)
+        subscribe_auction_items(region_id, auction_id)
 
     with _auction_result_lock:
         stale = [aid for aid in _auction_result_subscriptions if aid not in db_auctions]
         for aid in stale:
             _auction_result_subscriptions.pop(aid)["stop"].set()
+    with _auction_items_lock:
+        stale_items = [aid for aid in _auction_items_subscriptions if aid not in db_auctions]
+        for aid in stale_items:
+            _auction_items_subscriptions.pop(aid)["stop"].set()
 
-    print(f"[listener] sync complete — {len(active_regions())} regions, {len(db_auctions)} auction result streams")
+    print(f"[listener] sync complete — {len(active_regions())} regions, {len(db_auctions)} result+items streams")
 
 
 def health() -> dict:
@@ -468,15 +626,20 @@ def health() -> dict:
     with _region_lock:
         region_subs = list(_region_subscriptions.items())
     with _auction_result_lock:
-        auction_subs = list(_auction_result_subscriptions.items())
+        result_subs = list(_auction_result_subscriptions.items())
+    with _auction_items_lock:
+        items_subs = list(_auction_items_subscriptions.items())
     dead_regions = [rid for rid, s in region_subs if not s["auction"].is_alive()]
-    dead_auctions = [aid for aid, s in auction_subs if not s["thread"].is_alive()]
+    dead_results = [aid for aid, s in result_subs if not s["thread"].is_alive()]
+    dead_items = [aid for aid, s in items_subs if not s["thread"].is_alive()]
     return {
         "region_subscriptions": len(region_subs),
-        "auction_result_streams": len(auction_subs),
+        "auction_result_streams": len(result_subs),
+        "auction_items_streams": len(items_subs),
         "dead_regions": dead_regions,
-        "dead_auction_streams": dead_auctions,
-        "healthy": not dead_regions and not dead_auctions,
+        "dead_result_streams": dead_results,
+        "dead_items_streams": dead_items,
+        "healthy": not dead_regions and not dead_results and not dead_items,
     }
 
 
@@ -521,6 +684,25 @@ def _watchdog(interval: int = 30):
                     if auction_id in _auction_result_subscriptions:
                         _auction_result_subscriptions[auction_id]["thread"] = t
                 print(f"[watchdog] restarted results thread for {auction_id}")
+
+        with _auction_items_lock:
+            items_subs = list(_auction_items_subscriptions.items())
+        for auction_id, sub in items_subs:
+            stop = sub["stop"]
+            if stop.is_set():
+                continue
+            if not sub["thread"].is_alive():
+                t = threading.Thread(
+                    target=_stream_auction_items,
+                    args=(sub["region_id"], auction_id, stop),
+                    daemon=True,
+                    name=f"rtdb-items-{auction_id}",
+                )
+                t.start()
+                with _auction_items_lock:
+                    if auction_id in _auction_items_subscriptions:
+                        _auction_items_subscriptions[auction_id]["thread"] = t
+                print(f"[watchdog] restarted items thread for {auction_id}")
 
 
 def start_watchdog(interval: int = 30):
