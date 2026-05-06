@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
@@ -22,6 +22,7 @@ const AuctionsPage = () => {
   const [auctions, setAuctions] = useState([]);
   const [openStates, setOpenStates] = useState(new Set());
   const [savedIds, setSavedIds] = useState(new Set());
+  const sseRef = useRef(null);
 
   const navigate = useNavigate();
   const { token } = useAuth();
@@ -29,8 +30,22 @@ const AuctionsPage = () => {
   useEffect(() => {
     fetch(`${API}/auctions`)
       .then(r => r.json())
-      .then(setAuctions)
+      .then(data => {
+        setAuctions(data);
+        if (!data.length) return;
+        const ids = data.map(a => a.auction_id).join(',');
+        const source = new EventSource(`${API}/stream/multi?auctions=${ids}`);
+        source.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'ended') {
+            setAuctions(prev => prev.filter(a => a.auction_id !== msg.auction_id));
+          }
+        };
+        source.onerror = () => source.close();
+        sseRef.current = source;
+      })
       .catch(console.error);
+    return () => sseRef.current?.close();
   }, []);
 
   useEffect(() => {
