@@ -66,8 +66,7 @@ def _discover_region(region_id: str) -> list[dict]:
             ended = bool(auction.get("ended"))
             settings = auction.get("settings") or {}
             auction_type = settings.get("auctionType", "")
-            # SEQUENCE close is auctioneer-controlled (no fixed deadline); LISTING auctions have an expiration
-            closes_at = None if auction_type == "SEQUENCE" else settings.get("expiration")
+            closes_at = settings.get("startEvent") if auction_type == "SEQUENCE" else settings.get("expiration")
             auctions.append({
                 "auction_id":     auction_id,
                 "region_id":      region_id,

@@ -68,7 +68,7 @@ const AuctionsPage = () => {
     });
   };
 
-  const active = auctions.filter(a => a.auction_status !== 'completed');
+  const active = auctions.filter(a => a.auction_status !== 'completed' && a.vehicles_listed > 0);
   const states = [...new Set(active.map(a => getState(a.region_id)))].sort();
   const byState = states.reduce((acc, s) => {
     acc[s] = active.filter(a => getState(a.region_id) === s);
