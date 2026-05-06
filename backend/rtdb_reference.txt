@@ -1,0 +1,699 @@
+================================================================================
+FIREBASE RTDB REFERENCE — Autura Marketplace
+Source: reverse-engineered from app.marketplace.autura.com/static/js/main.be109958.js
+================================================================================
+
+This document describes all Firebase RTDB paths used by the Autura Marketplace
+frontend, including what data lives at each path, how the client subscribes,
+and how our Python backend should interpret messages from the REST SSE interface.
+
+--------------------------------------------------------------------------------
+1. DATABASE ROOT
+--------------------------------------------------------------------------------
+
+    https://digital-auction.firebaseio.com
+
+All paths below are relative to this root.
+
+WebSocket endpoint (browser uses this directly):
+    wss://s-gke-usc1-nssi4-67.firebaseio.com/.ws?v=5&ns=digital-auction
+
+Our backend uses the REST SSE interface:
+    GET /{path}.json?auth={token}
+    Accept: text/event-stream
+
+REST SSE message envelope:
+    event: put          <- initial dump (full subtree)
+    data: {"path": "/", "data": { ... }}
+
+    event: patch        <- incremental update (merged, not replaced)
+    data: {"path": "/some/child", "data": { ... }}
+
+    event: cancel       <- auth revoked or permission denied
+    data: null
+
+    event: auth_revoked <- token expired
+    data: null
+
+IMPORTANT: The browser SDK uses child_added / child_changed events internally,
+but over REST SSE you only get put/patch. A "put" at a child path is equivalent
+to a child_added or child_replaced. A null data value means the node was deleted.
+
+--------------------------------------------------------------------------------
+2. PATH: /{regionId}/auctions
+--------------------------------------------------------------------------------
+
+PURPOSE: Auction lifecycle — status, ended flag, auctionSeries membership.
+
+SUBSCRIPTION (browser):
+    subscribeToSnapshot("/{regionId}/auctions", callback)
+    // listens with "value" event — gets full map on change
+
+SHAPE (each child keyed by auctionId, e.g. "auction-109555"):
+    {
+      "auctionId":    "auction-109555",   // sometimes absent (key is the id)
+      "regionId":     "NSH-TN",
+      "ended":        false,              // TRUE when auction is complete
+      "endedAt":      1714000000000,      // epoch ms, present when ended=true
+      "auctionSeries": "some-series-key",
+      "sellers":      { "JS-225": true },
+      "startTime":    1714000000000,      // epoch ms
+    }
+
+OUR USAGE:
+    - Watch for ended: true  → call handle_auction_completed()
+    - Unknown auctionId      → call _trigger_discover_and_scrape()
+    - REST SSE path: /{regionId}/auctions.json
+
+--------------------------------------------------------------------------------
+3. PATH: /{regionId}/results/{auctionId}/{itemId}
+--------------------------------------------------------------------------------
+
+PURPOSE: Timed / pre-auction bids. One child per item, updated as bids arrive.
+         This is the PRIMARY bid path for timed auctions.
+
+SUBSCRIPTION (browser):
+    path = "/{regionId}/results/{auctionId}"
+    subscribeToSnapshot(path, handler, "child_added")
+    subscribeToSnapshot(path, handler, "child_changed")
+
+    mapper: Gi = (regionId, auctionId) => snapshot => ({
+        ...snapshot.val(),   // the bid object below
+        itemId:   snapshot.key,   // e.g. "JS-225-50499"
+        regionId: regionId,
+        auctionId: auctionId,
+    })
+
+BID OBJECT shape (snapshot.val()) — verified from real SA-TX/auction-109498 live capture:
+    {
+      "amount":      1000,            // current winning bid in dollars (number)
+      "uid":         "gnC9MK81l2PFLhvsOi5h5Goekbz2",  // Firebase UID of winning bidder
+      "bidId":       "-Orvd8r7G5pqwkiKEolV",           // Firebase push ID of this bid
+      "expiration":  "2026-05-06T20:44:50.000Z",        // ISO 8601 — bid timer deadline
+      "timestamp":   "2026-05-06T04:56:02.760Z",        // ISO 8601 — when bid was placed
+      "start":       "2026-05-05T15:00:00.000Z",        // ISO 8601 — auction start time
+      "reservePrice": 0,              // reserve price (0 = no reserve)
+      "reserveMet":  true,            // whether reserve has been met
+      "isExemptFromSalesTax": false,
+      "isUserPreApproved":    false,
+      "payInFullAvailable":   true,
+      "fees": {
+        "bid":                 1000,  // same as amount
+        "salePrice":           1000,
+        "buyerFee":            0,
+        "platformFee":         100,
+        "adminFee":            32,
+        "variableFee":         0,
+        "vehicleKeyFee":       0,
+        "vehicleOtherFixedFee": 0,
+        "salesTax":            0,
+        "storageTax":          0,
+        "total":               1132, // buyer's total out-of-pocket
+        "totalSellerDue":      1032
+      },
+      "autobid": {                    // PRESENT when an autobid was outbid by this bid
+        "amount":    800,             // the autobid's max amount
+        "bidId":     "-Oruai6C02bnCORUZhV5",
+        "timestamp": "2026-05-06T00:05:47.598Z",
+        "uid":       "BdhvN6vGnWfx4oIRzrDcTkvpCl03"
+      }
+      // autobid is ABSENT when no autobid was involved
+      // authType and bidInfo are NOT present on /results/ updates (unlike /bids/)
+    }
+
+VALIDITY CHECK (from source):
+    A bid is valid only if:
+        uid != null
+        AND typeof amount === "number" AND amount > 0
+        AND authType != null
+
+OUR USAGE:
+    - REST SSE path: /{regionId}/results/{auctionId}.json
+    - On each child update: UPDATE vehicles SET current_bid = amount,
+      bid_expiration = expiration WHERE item_key = itemId
+    - Broadcast {"type": "bid", "item_key": itemId, "amount": amount}
+    - Unknown itemId → trigger rescrape (with _rescrape_attempted guard)
+
+WEBSOCKET UPDATE ENVELOPE (confirmed from live capture):
+    Server pushes bids as action "d" (data) with this structure:
+        {
+          "t": "d",
+          "d": {
+            "b": {
+              "p": "SA-TX/results/auction-109498/438-8999580",  // NOTE: no leading /
+              "d": { ...full bid object... }
+            },
+            "a": "d"   // "d" = server-pushed data (not a response to a request)
+          }
+        }
+
+    IMPORTANT: The path has NO leading slash in WebSocket push messages.
+    Our REST SSE interface always has a leading slash — this is a WebSocket-only quirk.
+
+REST SSE MESSAGE SHAPES for this path:
+
+    Initial dump (event: put, path: "/"):
+        data: {
+          "path": "/",
+          "data": {
+            "JS-225-50499": { "amount": 5000, "uid": "...", "expiration": "...", ... },
+            "JS-225-50500": { "amount": 3200, ... },
+            ...
+          }
+        }
+
+    Single item update (confirmed from live capture — full object replacement):
+        data: {
+          "path": "/438-8999580",
+          "data": { "amount": 1000, "uid": "...", "expiration": "...", "fees": {...}, ... }
+        }
+        → Full bid object is sent every time, not just changed fields.
+
+    Single field update (less common):
+        data: {
+          "path": "/JS-225-50499/amount",
+          "data": 5500
+        }
+
+    Item with no bids yet:
+        data: { "path": "/JS-225-50499", "data": null }   (deleted/absent)
+
+--------------------------------------------------------------------------------
+4. PATH: /{regionId}/items/{auctionId}/{itemId}
+--------------------------------------------------------------------------------
+
+PURPOSE: Full item state including live auctioneer bids (currentResult).
+         When an auctioneer is actively calling the car live, bids route here,
+         NOT to /results/. This path ALSO holds all item metadata.
+
+SUBSCRIPTION (browser):
+    ref = database.ref("/{regionId}/items/{auctionId}").orderByChild("idx")
+    subscribeToSnapshot(ref, callback)   // "value" event — full list
+
+    Each snapshot child:
+        {
+          ...item.val(),    // full item object (see ITEM OBJECT below)
+          key:      snapshot.key,   // item_key, e.g. "JS-225-50499"
+          regionId: regionId,
+          auctionId: auctionId,
+        }
+
+ITEM OBJECT shape (snapshot.val()) — verified from real DET-MI/auction-109770 dump:
+    {
+      "idx":          0,                    // sort index within auction (int)
+      "itemId":       "JS-430-49476",       // item ID string
+      "key":          "JS-430-49476",       // same as itemId (redundant)
+      "sellerId":     "JS-430",
+      "sellerVehicleId": "49476",           // seller's internal vehicle ID (string)
+      "auctionId":    "auction-109770",
+      "regionId":     "DET-MI",
+      "locationId":   "10550",              // seller location ID (string)
+      "status":       "published",          // "published", "sold", "unsold", "archived"
+      "publishedAt":  "2026-04-30T13:12:16.804Z",
+      "startingBid":  550,                  // minimum opening bid (number, dollars)
+      "reservePrice": 750,                  // reserve price (number, dollars)
+      "imagesCount":  13,                   // total images (int)
+      "importedFrom": "CLONED_ITEM",        // data provenance
+      "transId":      "2b4c9a7f-...",       // UUID transaction ID
+      "persistenceKey": "JkdGGnp0AAnzEzAyGha3",  // Firestore document key
+      "markedAsPublishedBy": "BcvdRZjB6af...",    // Firebase UID of publisher
+      "next":         "JS-430-50976",       // next item in auction order (linked list)
+      "prev":         "JS-430-52425",       // previous item in auction order
+      "storedAt":     null,                 // (sometimes present)
+      "candidateAt":  null,
+      "soldAt":       null,
+      "unsoldAt":     null,
+      "paidAt":       null,
+      "claimedAt":    null,
+      "archivedAt":   null,
+
+      "info": {
+        // NOTE: drivetrain, engineType, transmission are OBJECTS not strings
+        "vin":                "YS3FD75YX46015929",
+        "year":               2004,               // number, not string
+        "make":               "SAAB",             // uppercase
+        "model":              "9-3",
+        "exteriorColor":      "SILVER",           // uppercase
+        "body":               "4 DOOR",           // body style string
+        "keyStatus":          "HAS KEYS",         // "HAS KEYS" | "NO KEY"
+        "fuelType":           "Gasoline",         // or "Gasoline/E85", "Diesel"
+        "startCode":          "STARTS",           // "STARTS" | "UNKNOWN" | "RUNS & DRIVES"
+        "catalyticConverter": "YES",              // "YES" | "NO"
+        "documentationType":  "Title (Clean)",
+        "isNonStandardVin":   false,              // boolean
+        "numCylinders":       4,                  // int
+        "odometer":           169815,             // int, SOMETIMES ABSENT (no odometer reading)
+        "sellerSequence":     "5761",             // seller's internal sequence (string)
+
+        "drivetrain":   { "code": "FWD" },        // object — code: "FWD"|"AWD"|"4WD"|"RWD"
+        "engineType":   { "code": "L4, 2.0L; Turbo", "name": "L4, 2.0L; Turbo" },
+        "transmission": { "code": "AUTOMATIC", "name": "Automatic" },
+        // transmission SOMETIMES ABSENT
+
+        "updatedAt": { "_nanoseconds": 620000000, "_seconds": 1773343533 },
+        // Firestore Timestamp — NOT an ISO string
+        "updatedBy":  "BcvdRZjB6afTFQlWNArBee6Pg7K2",  // Firebase UID
+      },
+
+      // image: keyed by size, then by "img_0", "img_1", etc.
+      "image": {
+        "full_4x3": {
+          "img_0": {
+            "bucket":          "images.joyrideautos.com",
+            "contentType":     "image/jpg",
+            "height":          720,
+            "width":           960,
+            "idx":             0,
+            "name":            "1773343533_0",
+            "placeholderType": "front-passenger-side",
+            // placeholderType values: "front-passenger-side", "rear-driver-side",
+            //   "front-driver-side", "rear-passenger-side", "manufacturer-label", "other"
+            "status":          "loaded",
+            "uploadedAt":      1773343548517,  // epoch ms
+            "url":             "https://s3-us-west-2.amazonaws.com/images.joyrideautos.com/..."
+          },
+          "img_1": { ... }  // additional images
+        },
+        "original":     { "img_0": { ... }, ... },   // same structure, original resolution
+        "thumb_200":    { "img_0": { ... }, ... },   // 200px thumbnails
+        "thumbnail_4x3":{ "img_0": { ... }, ... },   // 4:3 thumbnails
+      },
+
+      "currentResult": {           // PRESENT when auctioneer is calling this car live
+        "amount":      5000,       // current live bid (number)
+        "uid":         "user-uid",
+        "authType":    "USER",
+        "expiration":  "2024-04-25T...",
+        "fees":        { ... },
+        "bidInfo":     { "bidderNumber": { "number": 42 } }
+      },
+      // currentResult is null/absent when no auctioneer is currently on this car
+
+      "result": {                  // FINAL result after item is sold/unsold
+        "amount":  5000,
+        "uid":     "user-uid",
+        ... (same shape as currentResult)
+      },
+
+      "totalBids":  12,            // sometimes present
+      "buyerInfo":  null,          // filled after purchase
+      "forbiddenAuctionsIds": [],
+      "paymentOverdueAt":  null,
+      "paymentExpiredAt":  null,
+    }
+
+REST SSE MESSAGE SHAPES for this path:
+
+    Initial dump (event: put, path: "/"):
+        data: {
+          "path": "/",
+          "data": {
+            "JS-225-50499": { "idx": 0, "info": {...}, "currentResult": null, "image": {...}, ... },
+            "JS-225-50500": { ... },
+            ...
+          }
+        }
+        → SKIP this in our listener (large payload; results stream provides bid state)
+
+    Single item replaced (path: "/{itemId}"):
+        data: {
+          "path": "/JS-225-50499",
+          "data": { "idx": 0, "currentResult": { "amount": 5000, ... }, ... }
+        }
+
+    currentResult replaced (path: "/{itemId}/currentResult"):
+        data: {
+          "path": "/JS-225-50499/currentResult",
+          "data": { "amount": 5500, "uid": "...", "expiration": "...", ... }
+        }
+
+    Single field in currentResult (path: "/{itemId}/currentResult/amount"):
+        data: {
+          "path": "/JS-225-50499/currentResult/amount",
+          "data": 5500
+        }
+
+    Status change (item sold/unsold):
+        data: {
+          "path": "/JS-225-50499/status",
+          "data": "sold"
+        }
+        data: {
+          "path": "/JS-225-50499/soldAt",
+          "data": "2024-04-25T..."
+        }
+        data: {
+          "path": "/JS-225-50499/result",
+          "data": { "amount": 5000, ... }
+        }
+
+    currentResult cleared (auction moved to next car):
+        data: {
+          "path": "/JS-225-50499/currentResult",
+          "data": null
+        }
+
+OUR USAGE:
+    - Parse path parts to extract itemId and field
+    - Only care about currentResult updates: extract amount, expiration
+    - UPDATE vehicles SET current_bid = amount, bid_expiration = expiration
+      WHERE item_key = itemId
+    - Broadcast {"type": "bid", "item_key": itemId, "amount": amount}
+    - Optionally watch status → "sold" to trigger harvest
+
+--------------------------------------------------------------------------------
+5. PATH: /{regionId}/autobids/{auctionId}/{itemId}
+--------------------------------------------------------------------------------
+
+PURPOSE: Autobids placed by buyers. Ordered by bidInfo/userId.
+
+SUBSCRIPTION (browser):
+    ref = database.ref("/{regionId}/autobids/{auctionId}/{itemId}")
+                  .orderByChild("bidInfo/userId")
+                  .equalTo(currentUser.uid)
+    subscribeToSnapshot(ref, callback, "value")
+
+SHAPE (each child is one autobid):
+    {
+      "amount":      6000,        // max bid the user authorized
+      "uid":         "user-uid",
+      "authType":    "AUTOBID",
+      "bidInfo": {
+        "userId": "user-uid",
+        "bidderNumber": { "number": 42 }
+      },
+      "paddleNumber": 42,
+      "createdAt":    { ".sv": "timestamp" }
+    }
+
+OUR USAGE: Not currently subscribed. Informational only.
+
+--------------------------------------------------------------------------------
+6. PATH: /{regionId}/bids/{auctionId}/{itemId}
+--------------------------------------------------------------------------------
+
+PURPOSE: Full bid HISTORY per item — last 10 bids, keyed by Firebase push ID.
+         This is DIFFERENT from /results/ (which only holds the current winner).
+         Browser subscribes with limit-to-last-10 ordered by key.
+
+SUBSCRIPTION (browser):
+    path = "/{regionId}/bids/{auctionId}/{itemId}"
+    query: { l: 10, vf: "r", i: ".key" }   // limitToLast(10), orderByKey
+
+BID OBJECT shape (each child keyed by Firebase push ID like "-Ort9rVJvyDngWkZQWSq"):
+    {
+      "amount":   2950,           // bid amount in dollars (number)
+      "authType": "USER",         // "USER" | "AUTOBID"
+      "uid":      "LI968u1tdwgY6xoSsQlpIhaKlYj1",   // Firebase UID of bidder
+      "type":     "auction",      // always "auction" for live bids
+      "createdAt": 1778001868816, // epoch ms (NOT a Firebase server timestamp)
+      "bidInfo": {
+        "accepted": true,         // whether bid was accepted
+        "userId":   "LI968u1tdwgY6xoSsQlpIhaKlYj1",
+        "timestamp": "2026-05-05T17:24:28.816Z",    // ISO 8601
+        "bidderNumber": {
+          "value":          8,                // paddle number (int)
+          "userName":       "Bidder 8",       // anonymized display name
+          "sellerUserName": "M**** W****",    // partially redacted real name
+          "email":          "monicac.williams@yahoo.com",  // full email visible!
+          "byManager":      false             // true if placed by auction manager
+        }
+      }
+    }
+
+NOTE: Full bidder emails ARE present in this path (not redacted in RTDB, only in UI).
+
+OUR USAGE: Could use to build per-item bid history. Currently not subscribed.
+
+--------------------------------------------------------------------------------
+6b. PATH: /{regionId}/biddersNumbers/{auctionId}/{itemId}
+--------------------------------------------------------------------------------
+
+PURPOSE: Map of Firebase UID -> bidder number info for all registered bidders on
+         a specific item. Populated when users register to bid on the item.
+
+SHAPE (keyed by Firebase UID):
+    {
+      "LI968u1tdwgY6xoSsQlpIhaKlYj1": {
+        "value":          8,
+        "userName":       "Bidder 8",
+        "sellerUserName": "M**** W****",
+        "email":          "monicac.williams@yahoo.com",
+        "byManager":      false
+      },
+      ...   // one entry per registered bidder
+    }
+
+OUR USAGE: Not subscribed. Used by browser to show bidder paddle numbers.
+
+--------------------------------------------------------------------------------
+7. PATH: /{regionId}/offers/{auctionId}/{itemId}/{offerId}
+--------------------------------------------------------------------------------
+
+PURPOSE: Buy-now / offer flow. Not relevant to bid tracking.
+
+SHAPE:
+    {
+      "uid":         "user-uid",
+      "amount":      5000,
+      "paddleNumber": 42,
+      "type":        "OFFER",
+      "authType":    "USER",
+      "autobidId":   null,
+      "bidInfo":     null,
+      "createdAt":   { ".sv": "timestamp" }
+    }
+
+OUR USAGE: Not subscribed.
+
+--------------------------------------------------------------------------------
+7. PATH: /{regionId}/auctionSeries
+--------------------------------------------------------------------------------
+
+PURPOSE: Auction series metadata (groups of auctions from same seller).
+
+SHAPE (each child keyed by series key):
+    {
+      "id":       12345,            // numeric series ID
+      "key":      "firebase-key",
+      "name":     "Joyride Austin",
+      "regionId": "NSH-TN",
+      "auctions": {
+        "auction-109555": { "auctionId": "auction-109555", "ended": false, ... }
+      }
+    }
+
+OUR USAGE: Used by auction discovery. Not directly subscribed in listener.
+
+--------------------------------------------------------------------------------
+8. PATH: /regions
+--------------------------------------------------------------------------------
+
+PURPOSE: All active regions.
+
+SHAPE (each child keyed by regionId):
+    {
+      "regionId": "NSH-TN",
+      "stateId":  "TN",
+      "name":     "Nashville",
+      ... other region metadata
+    }
+
+OUR USAGE: Used by auction_discovery.py to find all active regions.
+
+--------------------------------------------------------------------------------
+9. LIVE vs TIMED AUCTION BID ROUTING SUMMARY
+--------------------------------------------------------------------------------
+
+NOTE: Bid updates (amount, expiration, fees) are ONLY visible when subscribed to
+a specific auction's stream. The region-level /{regionId}/auctions path carries
+lifecycle events only (ended, auctionSeries membership, etc.) — no bid data flows
+through it. You must be subscribed to /{regionId}/results/{auctionId} or
+/{regionId}/items/{auctionId} to receive bids for that auction.
+
+
+    TIMED auction (no live auctioneer):
+        Bids → /{regionId}/results/{auctionId}/{itemId}
+        Path in REST SSE: /{regionId}/results/{auctionId}.json
+
+    LIVE auction (auctioneer calling cars):
+        Bids → /{regionId}/items/{auctionId}/{itemId}/currentResult
+        Path in REST SSE: /{regionId}/items/{auctionId}.json
+
+    BOTH can be active simultaneously (some items timed, auctioneer on one).
+    Our listener MUST subscribe to BOTH paths per auction.
+
+--------------------------------------------------------------------------------
+10. PATH PARSING IN PYTHON (REST SSE)
+--------------------------------------------------------------------------------
+
+When we receive a message on /{regionId}/results/{auctionId}.json:
+
+    data = json.loads(payload)
+    path  = data["path"]   # e.g. "/" or "/JS-225-50499" or "/JS-225-50499/amount"
+    inner = data["data"]
+
+    parts = [p for p in path.split("/") if p]
+
+    if len(parts) == 0:                      # initial full dump: path == "/"
+        # inner is dict of itemId -> bid_obj
+        for item_id, bid_obj in (inner or {}).items():
+            amount = bid_obj.get("amount")
+            expiration = bid_obj.get("expiration")
+
+    elif len(parts) == 1:                    # single item replaced
+        item_id = parts[0]
+        if isinstance(inner, dict):
+            amount = inner.get("amount")
+            expiration = inner.get("expiration")
+        elif inner is None:
+            pass  # item deleted / no bid
+
+    elif len(parts) == 2 and parts[1] == "amount":
+        item_id = parts[0]
+        amount = inner                       # scalar int/float
+
+    elif len(parts) == 2 and parts[1] == "expiration":
+        item_id = parts[0]
+        expiration = inner
+
+    # other field paths (uid, fees, bidInfo) — ignore
+
+
+When we receive a message on /{regionId}/items/{auctionId}.json:
+
+    parts = [p for p in path.split("/") if p]
+
+    if len(parts) == 0:                      # initial dump — SKIP (too large)
+        continue
+
+    elif len(parts) == 1:                    # full item replaced
+        item_id = parts[0]
+        if isinstance(inner, dict):
+            cr = inner.get("currentResult")
+            if isinstance(cr, dict):
+                amount = cr.get("amount")
+                expiration = cr.get("expiration")
+
+    elif len(parts) == 2 and parts[1] == "currentResult":
+        item_id = parts[0]
+        if isinstance(inner, dict):          # currentResult object set/replaced
+            amount = inner.get("amount")
+            expiration = inner.get("expiration")
+        elif inner is None:                  # currentResult cleared (car sold/moved)
+            pass
+
+    elif len(parts) >= 3 and parts[1] == "currentResult" and parts[2] == "amount":
+        item_id = parts[0]
+        amount = inner                       # scalar
+
+    elif len(parts) >= 3 and parts[1] == "currentResult" and parts[2] == "expiration":
+        item_id = parts[0]
+        expiration = inner
+
+    elif len(parts) == 2 and parts[1] == "status":
+        item_id = parts[0]
+        status = inner                       # "sold", "unsold", etc.
+        # Could trigger harvest if status == "sold"
+
+    # other field updates — ignore
+
+--------------------------------------------------------------------------------
+11. OTHER PATHS (browser-only, not needed by backend)
+--------------------------------------------------------------------------------
+
+These paths were confirmed via parse_har.py analysis of a captured HAR session and
+from Autura's JS bundle (main.be109958.js). The browser subscribes to all of them,
+but our backend has no need to watch them. Documented here so nothing is mysterious.
+
+  /globalConfig
+      Global feature flags and config values. Shape: flat key→value dict.
+      Browser reads once on load. Not region-scoped.
+
+  /regions
+      All active auction regions. Already documented in section 8.
+
+  /sellers/{sellerId}
+      Seller profile/metadata. Keyed by sellerId (e.g. "JS-225").
+      Shape: { name, locationId, ... }
+
+  /platformFeeSchedules
+      Fee schedule definitions used to compute buyer fees per tier.
+      Shape: nested dict of schedule name → tier → fee object.
+
+  /userRoles/{uid}
+      Role flags for a logged-in user (admin, seller, buyer, etc.).
+      Shape: { admin: bool, seller: bool, ... }
+
+  /userPreApproved/{uid}
+      Pre-approval status per user for specific sellers or auctions.
+      Shape: flat bool flags or nested by sellerId.
+
+  /wonItems/{uid}
+      Vehicles won by this user across all auctions.
+      Shape: dict of itemKey → won item summary.
+
+  /eventSubscriptions/{uid}
+      Events (auctions) this user has subscribed/registered for.
+      Shape: dict of eventId → bool or subscription metadata.
+
+  /events/transient/{eventId}
+      Live event state during a running auction (e.g. currently-on-block item).
+      Shape: { currentItemId, status, ... }
+      This is likely how the browser knows which car the auctioneer is on.
+
+  /users/{uid}/favorites/{itemKey}
+      User's saved/favorited vehicles. Shape: bool or timestamp.
+
+  /{regionId}/biddersNumbers/{auctionId}/{itemId}
+      Already documented in section 6b.
+
+  /{regionId}/attributes/{auctionId}
+      Filter attribute lookup tables for a specific auction. Confirmed from live capture.
+      Contains all possible values for filterable fields, used to populate filter dropdowns.
+      Shape:
+        {
+          "body":      { "4 DOOR": { "originalValue": "4 DOOR" }, "2 DOOR": {...}, ... },
+          "color":     { "BLACK": { "originalValue": "BLACK" }, ... },
+          "keyStatus": { "NO_KEY": { "originalValue": "NO_KEY" } },
+          "make":      { "FORD": { "originalValue": "FORD" }, ... },
+          "model":     { "FORD": { "F150": { "originalValue": "F150" }, "originalValue": "FORD" }, ... },
+          "year":      { "2020": { "originalValue": 2020 }, ... }
+        }
+      NOTE: model is nested make → model → {originalValue}. Year originalValue is a number.
+      Browser subscribes once per auction load, unsubscribes immediately after (action "n").
+
+  /userAnnouncements/{uid}/{regionId}/{auctionId}/dateClosed
+      Per-user dismissal timestamp for auction announcements/notifications.
+      Browser writes to this path (action "n") when user closes an announcement.
+      Shape: scalar string (ISO date) or null.
+
+  /GoogleDrive/queue
+      Internal upload queue for Google Drive integrations. Irrelevant.
+
+--------------------------------------------------------------------------------
+12. IMPORTANT NOTES
+--------------------------------------------------------------------------------
+
+- All paths in section 11 were verified via: (a) parse_har.py on a live HAR
+  capture, (b) JS bundle reverse-engineering of main.be109958.js ref() calls.
+
+- item_key in our DB == itemId in Firebase == snapshot.key in the results path.
+  Example: "JS-225-50499" (format: {sellerId}-{numeric})
+
+- Firebase REST SSE sends event: put for initial state and full replacements,
+  event: patch for partial updates (merged into existing node).
+  Our Python listener does not need to distinguish — both carry path+data.
+
+- Token expires every ~1 hour. The stream will send event: auth_revoked or
+  simply disconnect. Always reconnect with a fresh token.
+
+- The items path initial dump is large (full vehicle info for every lot).
+  Always skip it — the results path provides current bid state on connect.
+
+- A null data value at any path means that node was deleted from RTDB.
+  For bids: item has no current bid. For currentResult: car is off the block.
+
+================================================================================
+END OF REFERENCE
+================================================================================
