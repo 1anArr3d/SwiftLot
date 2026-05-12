@@ -220,6 +220,25 @@ def _trigger_discover_and_scrape(region_id: str, auction_id: str):
         print(f"[listener] discover+scrape error for {region_id}/{auction_id}: {e}")
 
 
+def _discover_and_scrape_unknown(region_id: str, auction_ids: list):
+    """Discover a region then scrape any auctions that were missing from our DB."""
+    import auction_discovery as discovery
+
+    try:
+        discovery.discover_region(region_id)
+        for auction_id in auction_ids:
+            row = query("SELECT auction_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
+            if not row:
+                continue
+            with _scraping_lock:
+                if auction_id in _scraping:
+                    continue
+                _scraping.add(auction_id)
+            _trigger_scrape(auction_id, region_id)
+    except Exception as e:
+        print(f"[listener] discover unknown error {region_id}: {e}")
+
+
 # ── Region-level SSE stream handlers ──────────────────────────────────────────
 
 def _process_auction_update(auction_id: str, region_id: str, auction_data: dict):
@@ -282,6 +301,19 @@ def _stream_region_auctions(region_id: str, stop: threading.Event):
                             _process_auction_update(auction_id, region_id, auction_data)
                         with _auctions_ready_lock:
                             _auctions_ready.add(region_id)
+                        # Discover auctions present in RTDB but missing from our DB
+                        unknown = [
+                            aid for aid, adata in inner.items()
+                            if isinstance(adata, dict) and not adata.get("ended", False)
+                            and not query("SELECT 1 FROM auctions WHERE auction_id = %s", (aid,), one=True)
+                        ]
+                        if unknown:
+                            print(f"[listener] {len(unknown)} unknown auction(s) in {region_id} at initial dump — triggering discovery")
+                            threading.Thread(
+                                target=_discover_and_scrape_unknown,
+                                args=(region_id, unknown),
+                                daemon=True
+                            ).start()
                     elif len(parts) == 1:
                         auction_id = parts[0]
                         # After initial dump: check for brand new auctions
@@ -355,6 +387,8 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
                         amount = inner.get("amount")
                         if amount is not None:
                             updates.append((item_key, amount, inner.get("expiration")))
+                        if inner.get("ended") and not is_initial:
+                            _broadcast(auction_id, {"type": "sold", "item_key": item_key})
                     elif len(parts) == 2:
                         item_key, field = parts[0], parts[1]
                         if field == "amount" and inner is not None:
@@ -364,6 +398,9 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
 
                     if updates:
                         print(f"[listener] {auction_id} bid update — {len(updates)} item(s): {[(k, a) for k, a, _ in updates if a is not None][:5]}")
+                        for item_key, amount, expiration in updates:
+                            if amount is not None:
+                                _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
                         with get_db() as conn:
                             for item_key, amount, expiration in updates:
                                 if amount is not None and expiration is not None:
@@ -381,9 +418,6 @@ def _stream_auction_results(region_id: str, auction_id: str, stop: threading.Eve
                                         "UPDATE vehicles SET bid_expiration = %s WHERE item_key = %s",
                                         (expiration, item_key)
                                     )
-                        for item_key, amount, expiration in updates:
-                            if amount is not None:
-                                _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
 
                         # After initial dump: unknown item_key means a new vehicle was added mid-auction
                         if not is_initial:
@@ -505,6 +539,8 @@ def _stream_auction_items(region_id: str, auction_id: str, stop: threading.Event
 
                     if updates:
                         print(f"[listener] {auction_id} live bid — {len(updates)} item(s): {[(k, a) for k, a, _ in updates[:5]]}")
+                        for item_key, amount, expiration in updates:
+                            _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
                         with get_db() as conn:
                             for item_key, amount, expiration in updates:
                                 if expiration is not None:
@@ -517,8 +553,6 @@ def _stream_auction_items(region_id: str, auction_id: str, stop: threading.Event
                                         "UPDATE vehicles SET current_bid = %s WHERE item_key = %s",
                                         (amount, item_key)
                                     )
-                        for item_key, amount, expiration in updates:
-                            _broadcast(auction_id, {"type": "bid", "item_key": item_key, "amount": amount, "expires": expiration})
 
         except Exception as e:
             if stop.is_set():
