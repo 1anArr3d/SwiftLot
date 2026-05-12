@@ -60,7 +60,6 @@ const AuctionDetailPage = () => {
         source.close();
       }
     };
-    source.onerror = () => source.close();
     return () => source.close();
   }, [id]);
 

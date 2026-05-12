@@ -346,6 +346,9 @@ async def stream_auction_bids(auction_id: str):
                 if r["item_key"] and r["current_bid"] is not None:
                     yield f"data: {json.dumps({'type': 'bid', 'item_key': r['item_key'], 'amount': r['current_bid'], 'expires': r['bid_expiration']})}\n\n"
             if auction:
+                if auction['auction_status'] == 'completed':
+                    yield f"data: {json.dumps({'type': 'ended'})}\n\n"
+                    return
                 yield f"data: {json.dumps({'type': 'status', 'auction_status': auction['auction_status']})}\n\n"
 
             # Stream events pushed by rtdb_listener — no polling, no sleep

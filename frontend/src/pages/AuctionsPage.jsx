@@ -41,7 +41,6 @@ const AuctionsPage = () => {
             setAuctions(prev => prev.filter(a => a.auction_id !== msg.auction_id));
           }
         };
-        source.onerror = () => source.close();
         sseRef.current = source;
       })
       .catch(console.error);
