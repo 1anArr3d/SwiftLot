@@ -119,6 +119,13 @@ def handle_auction_completed(auction_id: str, region_id: str):
     Run the end-of-auction snapshot: harvest from vehicles table, sync final bids
     to garage, then remove vehicles. Called when ended signal arrives from RTDB.
     """
+    vehicle_count = query(
+        "SELECT COUNT(*) AS cnt FROM vehicles WHERE auction_id = %s", (auction_id,), one=True
+    )
+    if not vehicle_count or vehicle_count["cnt"] == 0:
+        print(f"[listener] {auction_id} ended signal ignored — no vehicles scraped, likely premature")
+        return
+
     print(f"[listener] {auction_id} ended — running snapshot")
 
     unsubscribe_auction_results(auction_id)
