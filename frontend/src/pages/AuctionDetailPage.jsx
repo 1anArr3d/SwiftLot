@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
 import FilterSection from '../components/FilterSection';
@@ -9,10 +9,14 @@ import ImageCycler from '../components/ImageCycler';
 const AuctionDetailPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { token } = useAuth();
+  const targetVin = location.state?.vin ?? null;
+  const didScroll = useRef(false);
   const [auction, setAuction] = useState(null);
   const [auctionEnded, setAuctionEnded] = useState(false);
   const [vehicles, setVehicles] = useState([]);
+  const [liveBids, setLiveBids] = useState({});  // item_key -> {amount, expires}
   const [watchlistVins, setWatchlistVins] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedVin, setExpandedVin] = useState(null);
@@ -41,26 +45,53 @@ const AuctionDetailPage = () => {
     }
   }, [id, token]);
 
-  // Live bid updates via SSE
+  // Auto-expand and scroll to a vehicle linked from the homepage carousel
   useEffect(() => {
-    const source = new EventSource(`${API}/stream/auction/${id}`);
-    source.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'bid') {
-        setVehicles(prev => prev.map(v =>
-          v.item_key === msg.item_key
-            ? { ...v, current_bid: msg.amount, bid_expiration: msg.expires }
-            : v
-        ));
-      } else if (msg.type === 'status') {
-        setAuction(prev => prev ? { ...prev, auction_status: msg.auction_status } : prev);
-      } else if (msg.type === 'ended') {
-        setAuction(prev => prev ? { ...prev, auction_status: 'completed' } : prev);
-        setAuctionEnded(true);
+    if (!targetVin || !vehicles.length || didScroll.current) return;
+    didScroll.current = true;
+    setExpandedVin(targetVin);
+    // Wait for React to re-render the expanded row before measuring
+    setTimeout(() => {
+      const row = document.querySelector(`[data-vin="${targetVin}"]`);
+      if (!row) return;
+      const expandedRow = row.nextElementSibling?.classList.contains('expanded-row')
+        ? row.nextElementSibling : null;
+      const top = row.getBoundingClientRect().top + window.scrollY;
+      const bottom = (expandedRow ?? row).getBoundingClientRect().bottom + window.scrollY;
+      window.scrollTo({ top: (top + bottom) / 2 - window.innerHeight / 2, behavior: 'smooth' });
+    }, 100);
+  }, [vehicles, targetVin]);
+
+  // Live bid updates via SSE — bids stored separately to avoid vehicle fetch race condition
+  useEffect(() => {
+    setLiveBids({});
+    let stopped = false;
+    let source;
+
+    const connect = () => {
+      if (stopped) return;
+      source = new EventSource(`${API}/stream/auction/${id}`);
+      source.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'bid') {
+          setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
+        } else if (msg.type === 'status') {
+          setAuction(prev => prev ? { ...prev, auction_status: msg.auction_status } : prev);
+        } else if (msg.type === 'ended') {
+          setAuction(prev => prev ? { ...prev, auction_status: 'completed' } : prev);
+          setAuctionEnded(true);
+          stopped = true;
+          source.close();
+        }
+      };
+      source.onerror = () => {
         source.close();
-      }
+        if (!stopped) setTimeout(connect, 3000);
+      };
     };
-    return () => source.close();
+
+    connect();
+    return () => { stopped = true; source?.close(); };
   }, [id]);
 
   const toggleWatchlist = async (e, vin) => {
@@ -146,10 +177,18 @@ const AuctionDetailPage = () => {
       if (!terms.every(t => haystack.includes(t))) return false;
     }
     return true;
+  }).sort((a, b) => {
+    const ma = (a.make || '').localeCompare(b.make || '');
+    if (ma !== 0) return ma;
+    const mo = (a.model || '').localeCompare(b.model || '');
+    if (mo !== 0) return mo;
+    return (parseInt(a.year) || 0) - (parseInt(b.year) || 0);
   });
 
   const COLS = 16;
   const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
+  const getBid = (car) => liveBids[car.item_key]?.amount ?? car.current_bid;
+  const getExpires = (car) => liveBids[car.item_key]?.expires ?? car.bid_expiration;
 
   return (
     <div className="app-wrapper">
@@ -238,12 +277,13 @@ const AuctionDetailPage = () => {
             </thead>
             <tbody>
               {filteredVehicles.map((car, idx) => {
-                const images = car.images ? JSON.parse(car.images) : [];
+                const images = car.images ? (() => { try { return JSON.parse(car.images); } catch { return []; } })() : [];
                 const isExpanded = expandedVin === car.vin;
                 const liked = watchlistVins.has(car.vin);
                 return [
                   <tr
                     key={car.vin}
+                    data-vin={car.vin}
                     className={`${idx % 2 === 0 ? 'row-even' : 'row-odd'} row-clickable ${isExpanded ? 'row-expanded' : ''}`}
                     onClick={() => setExpandedVin(isExpanded ? null : car.vin)}
                   >
@@ -257,7 +297,7 @@ const AuctionDetailPage = () => {
                     <td>{car.engine_type}</td>
                     <td>{car.drivetrain}</td>
                     <td>{car.fuel_type || '—'}</td>
-                    <td className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</td>
+                    <td className={getBid(car) ? 'bid-active' : ''}>{fmt$(getBid(car))}</td>
                     <td>{fmt$(car.reserve_price)}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
@@ -305,11 +345,11 @@ const AuctionDetailPage = () => {
                               <div className="detail-item"><span className="detail-label">Body</span><span>{car.body_type || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Cylinders</span><span>{car.num_cylinders || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Doc Type</span><span>{car.documentation_type || '—'}</span></div>
-                              <div className="detail-item"><span className="detail-label">Current Bid</span><span className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</span></div>
+                              <div className="detail-item"><span className="detail-label">Current Bid</span><span className={getBid(car) ? 'bid-active' : ''}>{fmt$(getBid(car))}</span></div>
                               <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Reserve</span><span>{fmt$(car.reserve_price)}</span></div>
                               <div className="detail-item"><span className="detail-label">Buyer Fee</span><span>{fmt$(car.fee_price)}</span></div>
-                              {car.bid_expiration && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(car.bid_expiration).toLocaleString()}</span></div>}
+                              {getExpires(car) && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(getExpires(car)).toLocaleString()}</span></div>}
                               {car.seller_notes && <div className="detail-item detail-item-full"><span className="detail-label">Seller Notes</span><span>{car.seller_notes}</span></div>}
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (

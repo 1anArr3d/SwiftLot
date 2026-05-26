@@ -10,6 +10,7 @@ const WatchlistPage = () => {
   const navigate = useNavigate();
   const { token } = useAuth();
   const [vehicles, setVehicles] = useState([]);
+  const [liveBids, setLiveBids] = useState({});
   const [histStats, setHistStats] = useState({});
   const [expandedVin, setExpandedVin] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -53,21 +54,30 @@ const WatchlistPage = () => {
     });
   }, [vehicles.length]);
 
-  // Live bid updates via single multi-stream connection (one SSE per user, not per auction)
   const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');
   useEffect(() => {
     if (!auctionIdKey) return;
-    const source = new EventSource(`${API}/stream/multi?auctions=${auctionIdKey}`);
-    source.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'bid') {
-        setVehicles(prev => prev.map(v =>
-          v.item_key === msg.item_key ? { ...v, current_bid: msg.amount } : v
-        ));
-      }
+    setLiveBids({});
+    let stopped = false;
+    let source;
+
+    const connect = () => {
+      if (stopped) return;
+      source = new EventSource(`${API}/stream/multi?auctions=${auctionIdKey}`);
+      source.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'bid') {
+          setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
+        }
+      };
+      source.onerror = () => {
+        source.close();
+        if (!stopped) setTimeout(connect, 3000);
+      };
     };
-    source.onerror = () => source.close();
-    return () => source.close();
+
+    connect();
+    return () => { stopped = true; source?.close(); };
   }, [auctionIdKey]);
 
   const handleRemove = async (e, vin) => {
@@ -118,10 +128,17 @@ const WatchlistPage = () => {
       if (!terms.every(t => haystack.includes(t))) return false;
     }
     return true;
+  }).sort((a, b) => {
+    const ma = (a.make || '').localeCompare(b.make || '');
+    if (ma !== 0) return ma;
+    const mo = (a.model || '').localeCompare(b.model || '');
+    if (mo !== 0) return mo;
+    return (parseInt(a.year) || 0) - (parseInt(b.year) || 0);
   });
 
   const COLS = 15;
   const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
+  const getBid = (car) => liveBids[car.item_key]?.amount ?? car.current_bid;
 
   return (
     <div className="app-wrapper">
@@ -188,7 +205,7 @@ const WatchlistPage = () => {
             </thead>
             <tbody>
               {filtered.map((car, idx) => {
-                const images = car.images ? JSON.parse(car.images) : [];
+                const images = car.images ? (() => { try { return JSON.parse(car.images); } catch { return []; } })() : [];
                 const isExpanded = expandedVin === car.vin;
                 return [
                   <tr
@@ -206,7 +223,7 @@ const WatchlistPage = () => {
                     <td>{car.engine_type}</td>
                     <td>{car.drivetrain}</td>
                     <td>{car.fuel_type || '—'}</td>
-                    <td>{fmt$(car.current_bid)}</td>
+                    <td>{fmt$(getBid(car))}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
                     <td className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</td>
@@ -232,8 +249,8 @@ const WatchlistPage = () => {
                               <div className="detail-item"><span className="detail-label">Start Status</span><span>{car.start_status}</span></div>
                               <div className="detail-item"><span className="detail-label">Engine</span><span>{car.engine_type}</span></div>
                               <div className="detail-item"><span className="detail-label">Drivetrain</span><span>{car.drivetrain}</span></div>
-                              {car.current_bid != null && (
-                                <div className="detail-item"><span className="detail-label">Current Bid</span><span>{fmt$(car.current_bid)}</span></div>
+                              {getBid(car) != null && (
+                                <div className="detail-item"><span className="detail-label">Current Bid</span><span>{fmt$(getBid(car))}</span></div>
                               )}
                               {histStats[statsKey(car)] && (
                                 <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{fmt$(histStats[statsKey(car)].avg_sale)}</span></div>
