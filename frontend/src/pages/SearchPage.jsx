@@ -15,7 +15,7 @@ const SearchPage = () => {
   const [watchlistVins, setWatchlistVins] = useState(new Set());
   const [histStats, setHistStats] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
-  const [expandedVin, setExpandedVin] = useState(null);
+  const [expandedVins, setExpandedVins] = useState(new Set());
   const [yearRange, setYearRange] = useState([null, null]);
   const [odoRange, setOdoRange] = useState([null, null]);
   const [filters, setFilters] = useState({
@@ -220,7 +220,7 @@ const SearchPage = () => {
         </div>
 
         <div className="table-container">
-          <table className="vehicle-table">
+          <table className="vehicle-table search-table">
             <thead>
               <tr>
                 {['Year', 'Make', 'Model', 'Region', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
@@ -231,14 +231,17 @@ const SearchPage = () => {
             <tbody>
               {filtered.map((car, idx) => {
                 const images = car.images ? (() => { try { return JSON.parse(car.images); } catch { return []; } })() : [];
-                const isExpanded = expandedVin === car.vin;
+                const isExpanded = expandedVins.has(car.vin);
                 const liked = watchlistVins.has(car.vin);
                 return [
                   <tr
                     key={car.vin}
                     data-vin={car.vin}
                     className={`${idx % 2 === 0 ? 'row-even' : 'row-odd'} row-clickable ${isExpanded ? 'row-expanded' : ''}`}
-                    onClick={() => setExpandedVin(isExpanded ? null : car.vin)}
+                    onClick={() => {
+                      const opening = !expandedVins.has(car.vin);
+                      setExpandedVins(prev => { const n = new Set(prev); opening ? n.add(car.vin) : n.delete(car.vin); return n; });
+                    }}
                   >
                     <td>{car.year}</td>
                     <td>{car.make}</td>
