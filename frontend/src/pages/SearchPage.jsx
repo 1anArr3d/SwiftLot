@@ -1,87 +1,57 @@
-import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
+import { REGION_LABEL } from '../constants';
 import FilterSection from '../components/FilterSection';
 import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
 
-const AuctionDetailPage = () => {
-  const { id } = useParams();
+const SearchPage = () => {
   const navigate = useNavigate();
-  const location = useLocation();
   const { token } = useAuth();
-  const targetVin = location.state?.vin ?? null;
-  const didScroll = useRef(false);
-  const [auction, setAuction] = useState(null);
-  const [auctionEnded, setAuctionEnded] = useState(false);
   const [vehicles, setVehicles] = useState([]);
-  const [liveBids, setLiveBids] = useState({});  // item_key -> {amount, expires}
+  const [liveBids, setLiveBids] = useState({});
   const [watchlistVins, setWatchlistVins] = useState(new Set());
+  const [histStats, setHistStats] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedVin, setExpandedVin] = useState(null);
   const [yearRange, setYearRange] = useState([null, null]);
   const [odoRange, setOdoRange] = useState([null, null]);
-  const [histStats, setHistStats] = useState({});
   const [filters, setFilters] = useState({
-    make: new Set(), model: new Set(), start_status: new Set(),
-    engine_type: new Set(), drivetrain: new Set(),
+    make: new Set(), model: new Set(), region_id: new Set(),
+    start_status: new Set(), engine_type: new Set(), drivetrain: new Set(),
   });
 
   useEffect(() => {
-    fetch(`${API}/auctions/${id}`)
-      .then(r => r.json())
-      .then(setAuction)
-      .catch(console.error);
-    fetch(`${API}/auctions/${id}/vehicles`)
+    fetch(`${API}/vehicles`)
       .then(r => r.json())
       .then(setVehicles)
       .catch(console.error);
-    if (token) {
-      authFetch(token, `${API}/garage`)
-        .then(r => r.json())
-        .then(data => setWatchlistVins(new Set(data.map(v => v.vin))))
-        .catch(console.error);
-    }
-  }, [id, token]);
+  }, []);
 
-  // Auto-expand and scroll to a vehicle linked from the homepage carousel
   useEffect(() => {
-    if (!targetVin || !vehicles.length || didScroll.current) return;
-    didScroll.current = true;
-    setExpandedVin(targetVin);
-    // Wait for React to re-render the expanded row before measuring
-    setTimeout(() => {
-      const row = document.querySelector(`[data-vin="${targetVin}"]`);
-      if (!row) return;
-      const expandedRow = row.nextElementSibling?.classList.contains('expanded-row')
-        ? row.nextElementSibling : null;
-      const top = row.getBoundingClientRect().top + window.scrollY;
-      const bottom = (expandedRow ?? row).getBoundingClientRect().bottom + window.scrollY;
-      window.scrollTo({ top: (top + bottom) / 2 - window.innerHeight / 2, behavior: 'smooth' });
-    }, 100);
-  }, [vehicles, targetVin]);
+    if (!token) return;
+    authFetch(token, `${API}/garage`)
+      .then(r => r.json())
+      .then(data => setWatchlistVins(new Set(data.map(v => v.vin))))
+      .catch(console.error);
+  }, [token]);
 
-  // Live bid updates via SSE — bids stored separately to avoid vehicle fetch race condition
+  const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');
   useEffect(() => {
+    if (!auctionIdKey) return;
     setLiveBids({});
     let stopped = false;
     let source;
 
     const connect = () => {
       if (stopped) return;
-      source = new EventSource(`${API}/stream/auction/${id}`);
+      source = new EventSource(`${API}/stream/multi?auctions=${auctionIdKey}`);
       source.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'bid') {
           setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
-        } else if (msg.type === 'status') {
-          setAuction(prev => prev ? { ...prev, auction_status: msg.auction_status } : prev);
-        } else if (msg.type === 'ended') {
-          setAuction(prev => prev ? { ...prev, auction_status: 'completed' } : prev);
-          setAuctionEnded(true);
-          stopped = true;
-          source.close();
         }
       };
       source.onerror = () => {
@@ -92,23 +62,7 @@ const AuctionDetailPage = () => {
 
     connect();
     return () => { stopped = true; source?.close(); };
-  }, [id]);
-
-  const toggleWatchlist = async (e, vin) => {
-    e.stopPropagation();
-    if (!token) { navigate('/login', { state: { from: window.location.pathname } }); return; }
-    const inList = watchlistVins.has(vin);
-    try {
-      await authFetch(token, `${API}/garage/${vin}`, { method: inList ? 'DELETE' : 'POST' });
-      setWatchlistVins(prev => {
-        const next = new Set(prev);
-        inList ? next.delete(vin) : next.add(vin);
-        return next;
-      });
-    } catch (err) {
-      console.error('Watchlist toggle failed:', err);
-    }
-  };
+  }, [auctionIdKey]);
 
   const statsKey = (v) => `${v.make}|${v.model}|${v.year}`;
 
@@ -147,21 +101,21 @@ const AuctionDetailPage = () => {
   const yearMin = yearRange[0] ?? minYear;
   const yearMax = yearRange[1] ?? maxYear;
   const uniqueOpts = (key) => [...new Set(vehicles.map(c => c[key]).filter(Boolean))].sort();
-  const setFilter = (key, val) => setFilters(prev => ({ ...prev, [key]: val }));
   const odoValues = vehicles.map(v => parseOdo(v.last_recorded_odo)).filter(v => v !== null);
   const odoSliderMin = odoValues.length ? Math.floor(Math.min(...odoValues) / 10000) * 10000 : 0;
   const odoSliderMax = odoValues.length ? Math.ceil(Math.max(...odoValues) / 10000) * 10000 : 300000;
   const odoMin = odoRange[0] ?? odoSliderMin;
   const odoMax = odoRange[1] ?? odoSliderMax;
 
+  const setFilter = (key, val) => setFilters(prev => ({ ...prev, [key]: val }));
   const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null || odoRange[0] !== null || odoRange[1] !== null;
   const clearAll = () => {
-    setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
+    setFilters({ make: new Set(), model: new Set(), region_id: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
     setYearRange([null, null]);
     setOdoRange([null, null]);
   };
 
-  const filteredVehicles = vehicles.filter(car => {
+  const filtered = vehicles.filter(car => {
     const y = parseInt(car.year);
     if (!isNaN(y) && (y < yearMin || y > yearMax)) return false;
     if (odoRange[0] !== null || odoRange[1] !== null) {
@@ -185,10 +139,25 @@ const AuctionDetailPage = () => {
     return (parseInt(a.year) || 0) - (parseInt(b.year) || 0);
   });
 
-  const COLS = 16;
+  const toggleWatchlist = async (e, vin) => {
+    e.stopPropagation();
+    if (!token) { navigate('/login', { state: { from: window.location.pathname } }); return; }
+    const inList = watchlistVins.has(vin);
+    try {
+      await authFetch(token, `${API}/garage/${vin}`, { method: inList ? 'DELETE' : 'POST' });
+      setWatchlistVins(prev => {
+        const next = new Set(prev);
+        inList ? next.delete(vin) : next.add(vin);
+        return next;
+      });
+    } catch (err) {
+      console.error('Watchlist toggle failed:', err);
+    }
+  };
+
+  const COLS = 17;
   const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
   const getBid = (car) => liveBids[car.item_key]?.amount ?? car.current_bid;
-  const getExpires = (car) => liveBids[car.item_key]?.expires ?? car.bid_expiration;
 
   return (
     <div className="app-wrapper">
@@ -230,53 +199,37 @@ const AuctionDetailPage = () => {
         <FilterSection title="Drivetrain">
           <ChecklistFilter options={uniqueOpts('drivetrain')} selected={filters.drivetrain} onChange={v => setFilter('drivetrain', v)} />
         </FilterSection>
+        <FilterSection title="Region">
+          <ChecklistFilter
+            options={uniqueOpts('region_id')}
+            selected={filters.region_id}
+            onChange={v => setFilter('region_id', v)}
+            labelMap={REGION_LABEL}
+          />
+        </FilterSection>
       </aside>
 
       <div className="main-content">
-        <div className="auction-detail-header">
-          <div className="auction-detail-header-left">
-            <button className="btn" onClick={() => navigate(-1)}>Back</button>
-            <div className="auction-detail-title">
-              <span className="auction-detail-name">{auction?.title || auction?.seller_name || id}</span>
-              {auction?.region_id && <span className="auction-detail-meta">{auction.region_id}</span>}
-            </div>
-          </div>
-          <div className="auction-detail-header-right">
-            <span className="vehicle-count-badge">{filteredVehicles.length} / {vehicles.length} vehicles</span>
-            {auction && (
-              <a
-                className="btn"
-                href={`https://app.marketplace.autura.com/auction/${auction.region_id}/${id}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Listing
-              </a>
-            )}
-          </div>
-        </div>
-        {auctionEnded && (
-          <div className="auction-ended-banner">This auction has ended.</div>
-        )}
         <div className="controls">
           <input
             placeholder="Search..."
             className="input-search"
             onChange={e => setSearchTerm(e.target.value)}
           />
+          <span className="vehicle-count-badge">{filtered.length} / {vehicles.length} vehicles</span>
         </div>
 
         <div className="table-container">
           <table className="vehicle-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Region', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filteredVehicles.map((car, idx) => {
+              {filtered.map((car, idx) => {
                 const images = car.images ? (() => { try { return JSON.parse(car.images); } catch { return []; } })() : [];
                 const isExpanded = expandedVin === car.vin;
                 const liked = watchlistVins.has(car.vin);
@@ -290,6 +243,7 @@ const AuctionDetailPage = () => {
                     <td>{car.year}</td>
                     <td>{car.make}</td>
                     <td>{car.model}</td>
+                    <td>{REGION_LABEL[car.region_id] ?? car.region_id}</td>
                     <td>{car.color}</td>
                     <td>{car.key_status}</td>
                     <td className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</td>
@@ -320,6 +274,12 @@ const AuctionDetailPage = () => {
                           </div>
                           <div className="expanded-details">
                             <div className="expanded-actions">
+                              <button
+                                className="btn"
+                                onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.auction_id}`, { state: { vin: car.vin } }); }}
+                              >
+                                View in Auction
+                              </button>
                               <a
                                 className="btn"
                                 href={car.item_id
@@ -336,6 +296,7 @@ const AuctionDetailPage = () => {
                               <div className="detail-item"><span className="detail-label">Year</span><span>{car.year}</span></div>
                               <div className="detail-item"><span className="detail-label">Make</span><span>{car.make}</span></div>
                               <div className="detail-item"><span className="detail-label">Model</span><span>{car.model}</span></div>
+                              <div className="detail-item"><span className="detail-label">Region</span><span>{REGION_LABEL[car.region_id] ?? car.region_id}</span></div>
                               <div className="detail-item"><span className="detail-label">Color</span><span>{car.color}</span></div>
                               <div className="detail-item"><span className="detail-label">Keys</span><span>{car.key_status}</span></div>
                               <div className="detail-item"><span className="detail-label">Cat. Converter</span><span className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</span></div>
@@ -349,7 +310,7 @@ const AuctionDetailPage = () => {
                               <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Reserve</span><span>{fmt$(car.reserve_price)}</span></div>
                               <div className="detail-item"><span className="detail-label">Buyer Fee</span><span>{fmt$(car.fee_price)}</span></div>
-                              {getExpires(car) && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(getExpires(car)).toLocaleString()}</span></div>}
+                              {car.bid_expiration && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(car.bid_expiration).toLocaleString()}</span></div>}
                               {car.seller_notes && <div className="detail-item detail-item-full"><span className="detail-label">Seller Notes</span><span>{car.seller_notes}</span></div>}
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
@@ -363,8 +324,8 @@ const AuctionDetailPage = () => {
                   )
                 ];
               })}
-              {filteredVehicles.length === 0 && (
-                <tr><td colSpan={COLS} className="empty-msg">No vehicles available.</td></tr>
+              {filtered.length === 0 && vehicles.length > 0 && (
+                <tr><td colSpan={COLS} className="empty-msg">No vehicles match your filters.</td></tr>
               )}
             </tbody>
           </table>
@@ -374,4 +335,4 @@ const AuctionDetailPage = () => {
   );
 };
 
-export default AuctionDetailPage;
+export default SearchPage;

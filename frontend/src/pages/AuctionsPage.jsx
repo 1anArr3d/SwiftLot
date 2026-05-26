@@ -28,23 +28,34 @@ const AuctionsPage = () => {
   const { token } = useAuth();
 
   useEffect(() => {
+    let stopped = false;
     fetch(`${API}/auctions`)
       .then(r => r.json())
       .then(data => {
         setAuctions(data);
-        if (!data.length) return;
+        if (!data.length || stopped) return;
         const ids = data.map(a => a.auction_id).join(',');
-        const source = new EventSource(`${API}/stream/multi?auctions=${ids}`);
-        source.onmessage = (e) => {
-          const msg = JSON.parse(e.data);
-          if (msg.type === 'ended') {
-            setAuctions(prev => prev.filter(a => a.auction_id !== msg.auction_id));
-          }
+
+        const connect = () => {
+          if (stopped) return;
+          const source = new EventSource(`${API}/stream/multi?auctions=${ids}`);
+          source.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'ended') {
+              setAuctions(prev => prev.filter(a => a.auction_id !== msg.auction_id));
+            }
+          };
+          source.onerror = () => {
+            source.close();
+            if (!stopped) setTimeout(connect, 3000);
+          };
+          sseRef.current = source;
         };
-        sseRef.current = source;
+
+        connect();
       })
       .catch(console.error);
-    return () => sseRef.current?.close();
+    return () => { stopped = true; sseRef.current?.close(); };
   }, []);
 
   useEffect(() => {
@@ -67,7 +78,10 @@ const AuctionsPage = () => {
     });
   };
 
-  const active = auctions.filter(a => a.auction_status !== 'completed' && a.vehicles_listed > 0);
+  const FAR_FUTURE = '9999-12-31T00:00:00.000Z';
+  const active = auctions
+    .filter(a => a.auction_status !== 'completed')
+    .sort((a, b) => (a.closes_at || FAR_FUTURE).localeCompare(b.closes_at || FAR_FUTURE));
   const states = [...new Set(active.map(a => getState(a.region_id)))].sort();
   const byState = states.reduce((acc, s) => {
     acc[s] = active.filter(a => getState(a.region_id) === s);
