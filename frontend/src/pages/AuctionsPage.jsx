@@ -34,7 +34,8 @@ const AuctionsPage = () => {
       .then(data => {
         setAuctions(data);
         if (!data.length || stopped) return;
-        const ids = data.map(a => a.auction_id).join(',');
+        const ids = data.filter(a => a.vehicles_listed > 0).map(a => a.auction_id).join(',');
+        if (!ids) return;
 
         const connect = () => {
           if (stopped) return;
@@ -80,7 +81,7 @@ const AuctionsPage = () => {
 
   const FAR_FUTURE = '9999-12-31T00:00:00.000Z';
   const active = auctions
-    .filter(a => a.auction_status !== 'completed')
+    .filter(a => a.auction_status !== 'completed' && a.vehicles_listed > 0)
     .sort((a, b) => (a.closes_at || FAR_FUTURE).localeCompare(b.closes_at || FAR_FUTURE));
   const states = [...new Set(active.map(a => getState(a.region_id)))].sort();
   const byState = states.reduce((acc, s) => {
