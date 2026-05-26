@@ -152,6 +152,7 @@ input, button { font-family: var(--font); }
 }
 .sidebar-header, .filter-section-title { display: flex; justify-content: space-between; align-items: center; }
 .sidebar-header { flex-shrink: 0; }
+.sidebar-toggle-caret { font-size: 11px; color: var(--text-secondary); }
 .filter-section-title { width: 100%; cursor: pointer; text-align: left; }
 .filter-section-title.is-open { background: #5a6a78; }
 
