@@ -16,7 +16,6 @@ const FAR_FUTURE = '9999-12-31T00:00:00.000Z';
 
 const SavedAuctionsPage = () => {
   const [auctions, setAuctions] = useState([]);
-  const [sortOrder, setSortOrder] = useState('soonest');
   const [filters, setFilters] = useState({ city: new Set(), state: new Set() });
   const navigate = useNavigate();
   const { token } = useAuth();
@@ -48,13 +47,7 @@ const SavedAuctionsPage = () => {
       if (filters.state.size > 0 && !filters.state.has(getState(a.region_id))) return false;
       return true;
     })
-    .sort((a, b) => {
-      const dateA = a.closes_at || FAR_FUTURE;
-      const dateB = b.closes_at || FAR_FUTURE;
-      return sortOrder === 'soonest'
-        ? dateA.localeCompare(dateB)
-        : dateB.localeCompare(dateA);
-    });
+    .sort((a, b) => (a.closes_at || FAR_FUTURE).localeCompare(b.closes_at || FAR_FUTURE));
 
   return (
     <div className="app-wrapper">
@@ -63,22 +56,6 @@ const SavedAuctionsPage = () => {
           <span>Filters</span>
           {hasActiveFilters && <button className="clear-all-btn" onClick={clearAll}>Clear All</button>}
         </div>
-
-        <FilterSection title="Sort">
-          <div className="checklist">
-            {[['soonest', 'Ending Soonest'], ['latest', 'Ending Latest']].map(([val, label]) => (
-              <label key={val} className="checklist-item">
-                <input
-                  type="radio"
-                  name="sort"
-                  checked={sortOrder === val}
-                  onChange={() => setSortOrder(val)}
-                />
-                <span>{label}</span>
-              </label>
-            ))}
-          </div>
-        </FilterSection>
 
         <FilterSection title="City">
           <ChecklistFilter
