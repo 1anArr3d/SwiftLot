@@ -25,9 +25,10 @@ export default function HomePage() {
   const slots    = useRef([]); // logical slot index per card
   const cards    = useRef([]); // { el, img, name, bid, auction, closes }
   const scroll   = useRef(0);
+  const vel      = useRef(SPEED); // px/frame, decays to SPEED after swipe
   const raf      = useRef(null);
   const ready    = useRef(false);
-  const drag     = useRef({ on: false, startX: 0, startScroll: 0, delta: 0 });
+  const drag     = useRef({ on: false, startX: 0, startScroll: 0, delta: 0, lastX: 0, lastTime: 0 });
   const stride   = useRef(0); // measured at init: card offsetWidth + gap
 
   function nextVehicle() {
@@ -90,7 +91,10 @@ export default function HomePage() {
   // RAF: advance scroll + recycle off-screen cards
   useEffect(() => {
     const tick = () => {
-      if (!drag.current.on) scroll.current += SPEED;
+      if (!drag.current.on) {
+        vel.current += (SPEED - vel.current) * 0.04; // decay toward cruise speed
+        scroll.current += vel.current;
+      }
 
       if (ready.current) {
         const s = slots.current;
@@ -117,20 +121,28 @@ export default function HomePage() {
 
   // Pointer drag (works for mouse + touch via pointer events)
   const onPointerDown = e => {
-    drag.current = { on: true, startX: e.clientX, startScroll: scroll.current, delta: 0, target: e.target };
+    drag.current = { on: true, startX: e.clientX, startScroll: scroll.current, delta: 0, target: e.target, lastX: e.clientX, lastTime: performance.now() };
+    vel.current = 0;
     e.currentTarget.setPointerCapture(e.pointerId);
     e.currentTarget.style.cursor = 'grabbing';
   };
   const onPointerMove = e => {
     if (!drag.current.on) return;
+    const now = performance.now();
+    const dt = Math.max(now - drag.current.lastTime, 1);
     const dx = e.clientX - drag.current.startX;
     drag.current.delta = Math.abs(dx);
+    // velocity in px/frame (assuming 60fps) — negative dx = swiping left = same direction as auto-scroll
+    vel.current = (-(e.clientX - drag.current.lastX) / dt) * 16;
+    drag.current.lastX = e.clientX;
+    drag.current.lastTime = now;
     scroll.current = drag.current.startScroll - dx;
   };
   const onPointerUp = e => {
     drag.current.on = false;
     e.currentTarget.style.cursor = 'grab';
   };
+  const onPointerCancel = () => { drag.current.on = false; };
   const onClick = e => {
     if (drag.current.delta > 5) return;
     const card = drag.current.target?.closest('[data-auction-id]');
@@ -174,6 +186,7 @@ export default function HomePage() {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
           onClick={onClick}
         >
           <div
