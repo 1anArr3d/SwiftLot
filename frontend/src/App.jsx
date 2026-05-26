@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { auth } from './firebase';
@@ -9,6 +9,8 @@ import WatchlistPage from './pages/WatchlistPage';
 import SavedAuctionsPage from './pages/SavedAuctionsPage';
 import LoginPage from './pages/LoginPage';
 import AboutPage from './pages/AboutPage';
+import HomePage from './pages/HomePage';
+import SearchPage from './pages/SearchPage';
 import './App.css';
 
 const ProtectedRoute = ({ children }) => {
@@ -23,32 +25,83 @@ const NavBar = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState(null);
+  const navRef = useRef(null);
 
   const handleSignOut = async () => {
     await signOut(auth);
     navigate('/login');
     setMenuOpen(false);
+    setOpenDropdown(null);
   };
 
-  const close = () => setMenuOpen(false);
+  useEffect(() => {
+    const handler = (e) => {
+      if (navRef.current && !navRef.current.contains(e.target)) setOpenDropdown(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const toggle = (name) => setOpenDropdown(prev => prev === name ? null : name);
+  const close = () => { setMenuOpen(false); setOpenDropdown(null); };
 
   return (
-    <nav className="topnav">
-      <NavLink to="/auctions" className="topnav-brand" onClick={close}>SwiftLot</NavLink>
-      <button className="nav-hamburger" onClick={() => setMenuOpen(o => !o)} aria-label="Menu">
-        <span /><span /><span />
-      </button>
-      <div className={`nav-menu${menuOpen ? ' open' : ''}`}>
-        <NavLink to="/auctions" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>Auctions</NavLink>
-        <NavLink to="/watchlist" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>Watchlist</NavLink>
-        <NavLink to="/my-garage" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>My Garage</NavLink>
-        <NavLink to="/about" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>About</NavLink>
-        {user
-          ? <button className="btn-link nav-signout" onClick={handleSignOut}>Sign Out</button>
-          : <NavLink to="/login" className="nav-link nav-signout" onClick={close}>Sign In</NavLink>
-        }
+    <header className="site-header" ref={navRef}>
+      {/* Top bar: brand + auth */}
+      <div className="topbar">
+        <NavLink to="/" className="topnav-brand" onClick={close}>SwiftLot</NavLink>
+        <div className="topbar-auth">
+          {user
+            ? <button className="nav-auth-btn" onClick={handleSignOut}>Sign Out</button>
+            : <NavLink to="/login" className="nav-auth-btn">Sign In</NavLink>
+          }
+        </div>
       </div>
-    </nav>
+
+      {/* Bottom bar: navigation dropdowns */}
+      <nav className="topnav">
+        <button className="nav-hamburger" onClick={() => setMenuOpen(o => !o)} aria-label="Menu">
+          <span /><span /><span />
+        </button>
+
+        <div className={`nav-menu${menuOpen ? ' open' : ''}`}>
+          <div className="nav-dropdown">
+            <button className={`nav-dropdown-trigger${openDropdown === 'browse' ? ' active' : ''}`} onClick={() => toggle('browse')}>
+              Browse <span className="nav-caret">▾</span>
+            </button>
+            {openDropdown === 'browse' && (
+              <div className="nav-dropdown-panel">
+                <NavLink to="/auctions" className="nav-dropdown-item" onClick={close}>Auctions</NavLink>
+                <NavLink to="/search" className="nav-dropdown-item" onClick={close}>Search Vehicles</NavLink>
+              </div>
+            )}
+          </div>
+
+          <div className="nav-dropdown">
+            <button className={`nav-dropdown-trigger${openDropdown === 'account' ? ' active' : ''}`} onClick={() => toggle('account')}>
+              My Account <span className="nav-caret">▾</span>
+            </button>
+            {openDropdown === 'account' && (
+              <div className="nav-dropdown-panel">
+                <NavLink to="/watchlist" className="nav-dropdown-item" onClick={close}>Watchlist</NavLink>
+                <NavLink to="/my-garage" className="nav-dropdown-item" onClick={close}>My Garage</NavLink>
+              </div>
+            )}
+          </div>
+
+          <NavLink to="/about" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>About</NavLink>
+
+          {/* Mobile-only auth */}
+          <div className="nav-auth-mobile">
+            {user
+              ? <button className="btn-link" onClick={handleSignOut}>Sign Out</button>
+              : <NavLink to="/login" className="nav-link" onClick={close}>Sign In</NavLink>
+            }
+          </div>
+        </div>
+      </nav>
+    </header>
   );
 };
 
@@ -58,8 +111,9 @@ const App = () => (
       <NavBar />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<Navigate to="/auctions" replace />} />
+        <Route path="/" element={<HomePage />} />
         <Route path="/auctions" element={<AuctionsPage />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route path="/auctions/:id" element={<AuctionDetailPage />} />
         <Route path="/watchlist" element={<ProtectedRoute><SavedAuctionsPage /></ProtectedRoute>} />
         <Route path="/my-garage" element={<ProtectedRoute><WatchlistPage /></ProtectedRoute>} />

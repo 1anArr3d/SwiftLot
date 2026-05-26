@@ -46,6 +46,8 @@ class Vehicle(BaseModel):
     images_count: Optional[int] = None
     published_at: Optional[str] = None
     last_recorded_odo: Optional[str] = None
+    seller_name: Optional[str] = None
+    closes_at: Optional[str] = None
 
 
 class GarageVehicle(Vehicle):
