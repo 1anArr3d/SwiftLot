@@ -260,7 +260,6 @@ input, button { font-family: var(--font); }
 .nav-hamburger span { display: block; width: 22px; height: 2px; background: var(--text-primary); border-radius: 2px; transition: background 0.15s; }
 .nav-hamburger:hover span { background: var(--sky-light); }
 .nav-menu { display: flex; align-items: center; gap: var(--space-lg); }
-.nav-auth-mobile { display: none; }
 
 /* DROPDOWNS */
 .nav-dropdown { position: relative; }
@@ -345,6 +344,7 @@ input, button { font-family: var(--font); }
 .home-carousel-outer {
   overflow: hidden;
   cursor: grab; user-select: none; -webkit-user-select: none;
+  touch-action: none;
   padding: 8px 0 16px;
 }
 .home-carousel-track { height: 316px; /* 226px image + ~90px info */ }
@@ -401,7 +401,6 @@ input, button { font-family: var(--font); }
   .topbar { padding: 0 var(--space-md); }
   .topnav { flex-wrap: wrap; height: auto; padding: 8px var(--space-md); gap: var(--space-sm); }
   .nav-hamburger { display: flex; }
-  .nav-auth-mobile { display: flex; }
   .nav-menu { display: none; flex-direction: column; align-items: flex-start; width: 100%; gap: var(--space-md); padding: var(--space-sm) 0 var(--space-xs); border-top: 1px solid var(--border-dim); }
   .nav-menu.open { display: flex; }
   .nav-dropdown-trigger { color: var(--text-primary); }
@@ -428,8 +427,8 @@ input, button { font-family: var(--font); }
   .img-cycler.large .cycler-img { width: 100%; height: auto; aspect-ratio: 4/3; }
   .no-img.large { width: 100%; height: 200px; }
 
-  /* Detail grid: 2 columns on mobile */
-  .detail-grid { grid-template-columns: repeat(2, 1fr); }
+  /* Detail grid: 3 columns on mobile to reduce vertical height */
+  .detail-grid { grid-template-columns: repeat(3, 1fr); }
 
   /* Auction detail header wraps */
   .auction-detail-header { flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
@@ -452,17 +451,30 @@ input, button { font-family: var(--font); }
   .vehicle-table { font-size: 12px; }
   .vehicle-table td { padding: 7px 8px; }
 
-  /* AuctionDetailPage: Year(1), Make(2), Model(3), Bid(11), Avg Sale(15), Save(16) */
-  .vehicle-table:not(.watchlist-table) th:nth-child(4),  .vehicle-table:not(.watchlist-table) td:nth-child(4),
-  .vehicle-table:not(.watchlist-table) th:nth-child(5),  .vehicle-table:not(.watchlist-table) td:nth-child(5),
-  .vehicle-table:not(.watchlist-table) th:nth-child(6),  .vehicle-table:not(.watchlist-table) td:nth-child(6),
-  .vehicle-table:not(.watchlist-table) th:nth-child(7),  .vehicle-table:not(.watchlist-table) td:nth-child(7),
-  .vehicle-table:not(.watchlist-table) th:nth-child(8),  .vehicle-table:not(.watchlist-table) td:nth-child(8),
-  .vehicle-table:not(.watchlist-table) th:nth-child(9),  .vehicle-table:not(.watchlist-table) td:nth-child(9),
-  .vehicle-table:not(.watchlist-table) th:nth-child(10), .vehicle-table:not(.watchlist-table) td:nth-child(10),
-  .vehicle-table:not(.watchlist-table) th:nth-child(12), .vehicle-table:not(.watchlist-table) td:nth-child(12),
-  .vehicle-table:not(.watchlist-table) th:nth-child(13), .vehicle-table:not(.watchlist-table) td:nth-child(13),
-  .vehicle-table:not(.watchlist-table) th:nth-child(14), .vehicle-table:not(.watchlist-table) td:nth-child(14) { display: none; }
+  /* AuctionDetail + Search: shared — hide Color through Fuel (cols 4-10) */
+  .auction-detail-table th:nth-child(4),  .auction-detail-table td:nth-child(4),
+  .auction-detail-table th:nth-child(5),  .auction-detail-table td:nth-child(5),
+  .auction-detail-table th:nth-child(6),  .auction-detail-table td:nth-child(6),
+  .auction-detail-table th:nth-child(7),  .auction-detail-table td:nth-child(7),
+  .auction-detail-table th:nth-child(8),  .auction-detail-table td:nth-child(8),
+  .auction-detail-table th:nth-child(9),  .auction-detail-table td:nth-child(9),
+  .auction-detail-table th:nth-child(10), .auction-detail-table td:nth-child(10),
+  .search-table th:nth-child(4),  .search-table td:nth-child(4),
+  .search-table th:nth-child(5),  .search-table td:nth-child(5),
+  .search-table th:nth-child(6),  .search-table td:nth-child(6),
+  .search-table th:nth-child(7),  .search-table td:nth-child(7),
+  .search-table th:nth-child(8),  .search-table td:nth-child(8),
+  .search-table th:nth-child(9),  .search-table td:nth-child(9),
+  .search-table th:nth-child(10), .search-table td:nth-child(10),
+  .search-table th:nth-child(11), .search-table td:nth-child(11) { display: none; }
+
+  /* AuctionDetail: show Year(1),Make(2),Model(3),Bid(11),Reserve(12),AvgSale(15),Save(16) — hide VIN,Odo */
+  .auction-detail-table th:nth-child(13), .auction-detail-table td:nth-child(13),
+  .auction-detail-table th:nth-child(14), .auction-detail-table td:nth-child(14) { display: none; }
+
+  /* Search: show Year(1),Make(2),Model(3),Bid(12),Reserve(13),AvgSale(16),Save(17) — hide VIN,Odo */
+  .search-table th:nth-child(14), .search-table td:nth-child(14),
+  .search-table th:nth-child(15), .search-table td:nth-child(15) { display: none; }
 
   /* WatchlistPage: Year(1), Make(2), Model(3), Bid(11), Avg Sale(14), Remove(15) */
   .watchlist-table th:nth-child(4),  .watchlist-table td:nth-child(4),
