@@ -108,6 +108,7 @@ const SearchPage = () => {
   const odoMax = odoRange[1] ?? odoSliderMax;
 
   const setFilter = (key, val) => setFilters(prev => ({ ...prev, [key]: val }));
+  const [filtersOpen, setFiltersOpen] = useState(() => !window.matchMedia('(max-width: 768px)').matches);
   const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null || odoRange[0] !== null || odoRange[1] !== null;
   const clearAll = () => {
     setFilters({ make: new Set(), model: new Set(), region_id: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
@@ -162,51 +163,56 @@ const SearchPage = () => {
   return (
     <div className="app-wrapper">
       <aside className="sidebar">
-        <div className="sidebar-header">
+        <div className="sidebar-header" onClick={() => setFiltersOpen(o => !o)} style={{ cursor: 'pointer' }}>
           <span>Filters</span>
-          {hasActiveFilters && <button className="clear-all-btn" onClick={clearAll}>Clear All</button>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {hasActiveFilters && <button className="clear-all-btn" onClick={e => { e.stopPropagation(); clearAll(); }}>Clear All</button>}
+            <span className="sidebar-toggle-caret">{filtersOpen ? '▲' : '▼'}</span>
+          </div>
         </div>
-        <FilterSection title="Year">
-          <div className="year-range-labels">
-            <span>{yearMin}</span><span>{yearMax}</span>
-          </div>
-          <input type="range" min={minYear} max={maxYear} value={yearMin}
-            onChange={e => setYearRange([parseInt(e.target.value), yearRange[1]])} className="slider" />
-          <input type="range" min={minYear} max={maxYear} value={yearMax}
-            onChange={e => setYearRange([yearRange[0], parseInt(e.target.value)])} className="slider" />
-        </FilterSection>
-        <FilterSection title="Odometer">
-          <div className="year-range-labels">
-            <span>{odoMin.toLocaleString()} mi</span><span>{odoMax.toLocaleString()} mi</span>
-          </div>
-          <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMin}
-            onChange={e => setOdoRange([parseInt(e.target.value), odoRange[1]])} className="slider" />
-          <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMax}
-            onChange={e => setOdoRange([odoRange[0], parseInt(e.target.value)])} className="slider" />
-        </FilterSection>
-        <FilterSection title="Make">
-          <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
-        </FilterSection>
-        <FilterSection title="Model">
-          <ChecklistFilter options={uniqueOpts('model')} selected={filters.model} onChange={v => setFilter('model', v)} />
-        </FilterSection>
-        <FilterSection title="Status">
-          <ChecklistFilter options={uniqueOpts('start_status')} selected={filters.start_status} onChange={v => setFilter('start_status', v)} />
-        </FilterSection>
-        <FilterSection title="Engine">
-          <ChecklistFilter options={uniqueOpts('engine_type')} selected={filters.engine_type} onChange={v => setFilter('engine_type', v)} />
-        </FilterSection>
-        <FilterSection title="Drivetrain">
-          <ChecklistFilter options={uniqueOpts('drivetrain')} selected={filters.drivetrain} onChange={v => setFilter('drivetrain', v)} />
-        </FilterSection>
-        <FilterSection title="Region">
-          <ChecklistFilter
-            options={uniqueOpts('region_id')}
-            selected={filters.region_id}
-            onChange={v => setFilter('region_id', v)}
-            labelMap={REGION_LABEL}
-          />
-        </FilterSection>
+        {filtersOpen && <>
+          <FilterSection title="Year">
+            <div className="year-range-labels">
+              <span>{yearMin}</span><span>{yearMax}</span>
+            </div>
+            <input type="range" min={minYear} max={maxYear} value={yearMin}
+              onChange={e => setYearRange([parseInt(e.target.value), yearRange[1]])} className="slider" />
+            <input type="range" min={minYear} max={maxYear} value={yearMax}
+              onChange={e => setYearRange([yearRange[0], parseInt(e.target.value)])} className="slider" />
+          </FilterSection>
+          <FilterSection title="Odometer">
+            <div className="year-range-labels">
+              <span>{odoMin.toLocaleString()} mi</span><span>{odoMax.toLocaleString()} mi</span>
+            </div>
+            <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMin}
+              onChange={e => setOdoRange([parseInt(e.target.value), odoRange[1]])} className="slider" />
+            <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMax}
+              onChange={e => setOdoRange([odoRange[0], parseInt(e.target.value)])} className="slider" />
+          </FilterSection>
+          <FilterSection title="Make">
+            <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
+          </FilterSection>
+          <FilterSection title="Model">
+            <ChecklistFilter options={uniqueOpts('model')} selected={filters.model} onChange={v => setFilter('model', v)} />
+          </FilterSection>
+          <FilterSection title="Status">
+            <ChecklistFilter options={uniqueOpts('start_status')} selected={filters.start_status} onChange={v => setFilter('start_status', v)} />
+          </FilterSection>
+          <FilterSection title="Engine">
+            <ChecklistFilter options={uniqueOpts('engine_type')} selected={filters.engine_type} onChange={v => setFilter('engine_type', v)} />
+          </FilterSection>
+          <FilterSection title="Drivetrain">
+            <ChecklistFilter options={uniqueOpts('drivetrain')} selected={filters.drivetrain} onChange={v => setFilter('drivetrain', v)} />
+          </FilterSection>
+          <FilterSection title="Region">
+            <ChecklistFilter
+              options={uniqueOpts('region_id')}
+              selected={filters.region_id}
+              onChange={v => setFilter('region_id', v)}
+              labelMap={REGION_LABEL}
+            />
+          </FilterSection>
+        </>}
       </aside>
 
       <div className="main-content">
