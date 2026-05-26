@@ -91,14 +91,6 @@ const NavBar = () => {
           </div>
 
           <NavLink to="/about" className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`} onClick={close}>About</NavLink>
-
-          {/* Mobile-only auth */}
-          <div className="nav-auth-mobile">
-            {user
-              ? <button className="btn-link" onClick={handleSignOut}>Sign Out</button>
-              : <NavLink to="/login" className="nav-link" onClick={close}>Sign In</NavLink>
-            }
-          </div>
         </div>
       </nav>
     </header>
