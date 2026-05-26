@@ -57,6 +57,45 @@ def get_auction_vehicles(auction_id: str):
     return [dict(row) for row in rows]
 
 
+# ── Vehicle Search ───────────────────────────────────────────────────────────
+
+@router.get("/vehicles", response_model=list[Vehicle], tags=["vehicles"])
+def search_vehicles(
+    make: str = None,
+    model: str = None,
+    year_min: int = None,
+    year_max: int = None,
+    region_id: str = None,
+    limit: int = None,
+):
+    filters, args = ["v.make NOT IN ('OTHER', 'OTHER-NOT FOUND') AND v.year IS NOT NULL AND v.year < 9000"], []
+    if make:
+        filters.append("UPPER(make) = UPPER(%s)")
+        args.append(make)
+    if model:
+        filters.append("UPPER(model) LIKE UPPER(%s)")
+        args.append(f"%{model}%")
+    if year_min:
+        filters.append("year >= %s")
+        args.append(year_min)
+    if year_max:
+        filters.append("year <= %s")
+        args.append(year_max)
+    if region_id:
+        filters.append("region_id = %s")
+        args.append(region_id)
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    limit_clause = f"LIMIT {int(limit)}" if limit else ""
+    rows = query(
+        f"""SELECT v.*, a.seller_name, a.closes_at
+            FROM vehicles v
+            LEFT JOIN auctions a ON v.auction_id = a.auction_id
+            {where} ORDER BY v.year DESC, v.make, v.model {limit_clause}""",
+        tuple(args),
+    )
+    return [dict(row) for row in rows]
+
+
 # ── Historical Sales ──────────────────────────────────────────────────────────
 
 @router.get("/vehicles/{vin}/history", tags=["vehicles"])
@@ -303,10 +342,13 @@ async def stream_multi_auctions(auctions: str = ""):
         remaining = set(active_ids)
         try:
             while remaining:
-                aid, event = await merged.get()
-                yield f"data: {json.dumps({**event, 'auction_id': aid})}\n\n"
-                if event.get("type") == "ended":
-                    remaining.discard(aid)
+                try:
+                    aid, event = await asyncio.wait_for(merged.get(), timeout=25)
+                    yield f"data: {json.dumps({**event, 'auction_id': aid})}\n\n"
+                    if event.get("type") == "ended":
+                        remaining.discard(aid)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
         finally:
             for task in tasks:
                 task.cancel()
@@ -353,10 +395,13 @@ async def stream_auction_bids(auction_id: str):
 
             # Stream events pushed by rtdb_listener — no polling, no sleep
             while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event)}\n\n"
-                if event.get("type") == "ended":
-                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25)
+                    yield f"data: {json.dumps(event)}\n\n"
+                    if event.get("type") == "ended":
+                        break
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
         finally:
             listener.unsubscribe_queue(auction_id, queue)
 
