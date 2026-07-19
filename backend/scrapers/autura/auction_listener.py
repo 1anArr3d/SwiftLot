@@ -100,7 +100,7 @@ async def _on_update(auction_id: str, message):
         item_keys = [r["item_key"] for r in rows]
         logger.info("Ping auction %s → fetching %d vehicle detail(s)", auction_id, len(item_keys))
 
-        from autura_api import get_listing_detail
+        from .autura_api import get_listing_detail
         loop = asyncio.get_event_loop()
         results = await asyncio.gather(
             *[loop.run_in_executor(_executor, get_listing_detail, ik) for ik in item_keys],
@@ -182,7 +182,7 @@ def start_periodic_scraper(interval: int = 7200):
         while True:
             threading.Event().wait(interval)
             try:
-                from feed_scraper import run_full_feed
+                from .feed_scraper import run_full_feed
                 run_full_feed()
                 sync_with_db()
                 logger.info("Periodic scraper: full feed rescrape complete")
@@ -197,7 +197,7 @@ def start_reconciler(interval: int = 600):
         while True:
             threading.Event().wait(interval)
             try:
-                from feed_scraper import run_full_feed
+                from .feed_scraper import run_full_feed
                 run_full_feed()
                 logger.info("Reconciler: full rescrape complete")
             except Exception:

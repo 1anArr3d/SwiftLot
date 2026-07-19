@@ -8,7 +8,7 @@ and auction_discovery.py.
 import json
 from datetime import datetime, timezone
 from db import get_db, query
-from autura_api import get_all_feed, get_all_sellers
+from .autura_api import get_all_feed, get_all_sellers
 from config import INSPECTION_STATES
 
 
@@ -268,7 +268,7 @@ scrape_all = run_full_feed
 # ── Support functions ─────────────────────────────────────────────────────────
 
 def _handle_ended_auctions(active_ids: set[str], sold_listings: list[dict]):
-    import auction_listener as listener
+    from scrapers.autura import auction_listener as listener
 
     open_rows = query(
         "SELECT auction_id FROM auctions WHERE auction_status NOT IN ('completed', 'ENDED')"
@@ -334,5 +334,5 @@ def _run_inspections():
     if not vins:
         return
     print(f"[inspection] {len(vins)} VIN(s) queued for inspection ({', '.join(INSPECTION_STATES)})")
-    from inspection_scraper import run_inspection_batch
+    from .inspection_scraper import run_inspection_batch
     run_inspection_batch(vins)
