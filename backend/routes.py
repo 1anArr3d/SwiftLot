@@ -7,7 +7,7 @@ from state import scrape_status, discovery_status, inspection_status
 import auction_scraper as scraper
 import inspection_scraper as inspection
 import auction_discovery as discovery
-import rtdb_listener as listener
+import bid_listener as listener
 import threading
 import asyncio
 import json
@@ -319,7 +319,7 @@ async def stream_multi_auctions(auctions: str = ""):
         for aid in active_ids:
             q: asyncio.Queue = asyncio.Queue()
             per_auction_queues[aid] = q
-            listener.subscribe_queue(aid, q)
+            listener.add_client(aid, q)
 
         async def drain(aid, q):
             while True:
@@ -353,7 +353,7 @@ async def stream_multi_auctions(auctions: str = ""):
             for task in tasks:
                 task.cancel()
             for aid, q in per_auction_queues.items():
-                listener.unsubscribe_queue(aid, q)
+                listener.remove_client(aid, q)
 
     return StreamingResponse(
         event_gen(),
@@ -373,7 +373,7 @@ async def stream_auction_bids(auction_id: str):
     """
     async def event_gen():
         queue = asyncio.Queue()
-        listener.subscribe_queue(auction_id, queue)
+        listener.add_client(auction_id, queue)
         try:
             # Snapshot current state on connect so client isn't stale
             rows = query(
@@ -393,7 +393,7 @@ async def stream_auction_bids(auction_id: str):
                     return
                 yield f"data: {json.dumps({'type': 'status', 'auction_status': auction['auction_status']})}\n\n"
 
-            # Stream events pushed by rtdb_listener — no polling, no sleep
+            # Stream events pushed by bid_listener — no polling, no sleep
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=25)
@@ -403,7 +403,7 @@ async def stream_auction_bids(auction_id: str):
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
         finally:
-            listener.unsubscribe_queue(auction_id, queue)
+            listener.remove_client(auction_id, queue)
 
     return StreamingResponse(
         event_gen(),
@@ -417,22 +417,13 @@ async def stream_auction_bids(auction_id: str):
 def _run_scrape(auction_id: str, region_id: str):
     try:
         scrape_status[auction_id] = "running"
-        count = scraper.scrape_data(auction_id, region_id)
+        count = scraper.scrape_auction(auction_id)
         with get_db() as conn:
             conn.execute(
                 "UPDATE auctions SET last_scraped_count = %s, vehicles_listed = %s, last_scraped_at = NOW() WHERE auction_id = %s",
                 (count, count, auction_id)
             )
         scrape_status[auction_id] = "done"
-        if region_id and region_id.endswith('-TX'):
-            rows = query(
-                "SELECT vin FROM vehicles WHERE auction_id = %s AND last_recorded_odo IS NULL",
-                (auction_id,)
-            )
-            vins = [row["vin"] for row in rows]
-            if vins:
-                print(f"[scrape] Firing inspection for {len(vins)} VINs")
-                threading.Thread(target=inspection.run_inspection_batch, args=(vins,), daemon=True).start()
     except Exception as e:
         print(f"[scrape] ERROR for {auction_id}: {e}")
         scrape_status[auction_id] = "failed"

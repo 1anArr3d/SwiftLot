@@ -174,14 +174,17 @@ def init_db():
             PRIMARY KEY (auction_id, user_id)
         )''')
 
-    conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP")
+    with get_db() as conn:
+        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP")
+        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS seller_city TEXT")
+        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS seller_state TEXT")
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_garage_user_id ON garage (user_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_odometer_vin ON odometer_history (vin)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_vin ON historical_sales (vin)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_make_model_year ON historical_sales (make, model, year)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_auctions_status ON auctions (auction_status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_garage_user_id ON garage (user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_odometer_vin ON odometer_history (vin)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_vin ON historical_sales (vin)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_make_model_year ON historical_sales (make, model, year)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_auctions_status ON auctions (auction_status)")
 
     print("[db] Schema ready.")

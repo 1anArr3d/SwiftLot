@@ -9,9 +9,11 @@ from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
 import historical_harvester as harvester
+import auction_discovery as discovery
+import auction_scraper as scraper
 
 from routes import router
-import rtdb_listener as listener
+import bid_listener as listener
 import asyncio
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
@@ -23,12 +25,18 @@ async def lifespan(app: FastAPI):
     listener.set_event_loop(asyncio.get_running_loop())
 
     # One-time catch-up for auctions that ended while the server was down
-    threading.Thread(target=harvester.harvest_api, daemon=True).start()
+    threading.Thread(target=harvester.harvest_sold, daemon=True).start()
 
-    # Subscribe to all active regions immediately
-    threading.Thread(target=listener.sync_with_db, daemon=True).start()
+    # Discover all active auctions then subscribe
+    def _startup():
+        listener.sync_with_db()       # immediately subscribe with what's in DB
+        scraper.scrape_all()          # populate vehicles + discover auctions
+        listener.sync_with_db()       # pick up any newly discovered auctions
+    threading.Thread(target=_startup, daemon=True).start()
     listener.start_watchdog(interval=30)
     listener.start_retry_checker()
+    listener.start_bid_reconciler(interval=600)
+    listener.start_periodic_scraper(interval=7200)
 
     yield
 

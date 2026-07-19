@@ -1,160 +1,169 @@
 """
-Autura API client — Firebase auth + Cloud Run microservice calls.
-Token is cached and refreshed automatically (expires every ~1 hour).
+Autura Marketplace API client — mp.autura.com.
+
+Fetches HTML pages from the inventory feed, extracts the embedded
+React Router turbo-stream payload, and decodes it into plain dicts.
+No separate API calls needed — all data is server-rendered.
+
+See docs/autura_mp_api.md for full structure reference.
 """
 import json
-import os
-import time
-import urllib.request
-import urllib.error
-from dotenv import load_dotenv
+import math
+from curl_cffi import requests as cffi_requests
 
-load_dotenv()
-
-EMAIL    = os.getenv("AUTURA_EMAIL")
-PASSWORD = os.getenv("AUTURA_PASSWORD")
-_API_KEY = "AIzaSyCT8xhncpOmizPFVFTvdbv3k434fbhLoH4"
-
-_ITEMS_HTTP    = "https://items-http-duoqjfx26q-uc.a.run.app/api/internal/items-http"
-_AUCTIONS_HTTP = "https://auctions-http-duoqjfx26q-uc.a.run.app/api/internal/auctions-http"
-_SEARCH_HTTP   = "https://search-http-duoqjfx26q-uc.a.run.app/api/internal/search-http"
-
-_token: str | None = None
-_token_expiry: float = 0
-_token_lock = __import__('threading').Lock()
+BASE_URL = "https://mp.autura.com"
 
 
-def _login() -> dict:
-    # Try email/password first; fall back to anonymous auth for RTDB-only access
-    if EMAIL and PASSWORD:
-        try:
-            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={_API_KEY}"
-            payload = json.dumps({"email": EMAIL, "password": PASSWORD, "returnSecureToken": True}).encode()
-            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                return json.loads(r.read())
-        except Exception:
-            pass
-    # Anonymous auth — works for RTDB reads (public auction data)
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={_API_KEY}"
-    payload = json.dumps({"returnSecureToken": True}).encode()
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read())
+def _fetch_html(url: str) -> str:
+    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30)
+    resp.raise_for_status()
+    return resp.text
 
 
-def get_token() -> str:
-    global _token, _token_expiry
-    if _token and time.time() < _token_expiry - 60:
-        return _token
-    with _token_lock:
-        if _token and time.time() < _token_expiry - 60:
-            return _token
-        data = _login()
-        _token = data["idToken"]
-        _token_expiry = time.time() + int(data.get("expiresIn", 3600))
-        print("[autura_api] Refreshed auth token")
-        return _token
+def _fetch_flat(url: str) -> list:
+    """Fetch a .data endpoint that returns a turbo-stream JSON array directly."""
+    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30)
+    resp.raise_for_status()
+    return json.loads(resp.text)
 
 
-def _post(base_url: str, fn_name: str, inner: dict) -> dict:
-    token = get_token()
-    url = f"{base_url}/{fn_name}"
-    body = json.dumps({"data": inner}).encode()
-    req = urllib.request.Request(url, data=body, headers={
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read())
-
-
-def get_inventory(region_id: str, auction_id: str) -> list[dict]:
+def get_all_sellers() -> list[dict]:
     """
-    Fetch all items for an auction.
-
-    Each item dict contains:
-      item["info"]          – vin, year, make, model, exteriorColor, keyStatus,
-                               fuelType, engineType, startCode, catalyticConverter,
-                               drivetrain, body, numCylinders, ...
-      item["currentResult"] – amount (current bid $), expiration (ISO), fees, uid, ...
-                               (absent or minimal when no bids placed yet)
-      item["image"]         – full_4x3, thumb_200, original — keyed by index str
-      item["itemId"]        – e.g. "JS-225-50499"
-      item["key"]           – Firestore document key
-      item["sellerId"]      – e.g. "JS-225"
-      item["status"]        – "published" etc.
+    Fetch the full seller registry from /sellers.data.
+    Returns list of dicts with accountId and accountName.
     """
-    full_id = auction_id if auction_id.startswith("auction-") else f"auction-{auction_id}"
-    result = _post(_ITEMS_HTTP, "item-getInventoryItemsForAuction", {
-        "regionId": region_id,
-        "auctionId": full_id,
-    })
-    return result.get("result", [])
+    flat = _fetch_flat(f"{BASE_URL}/sellers.data?_routes=routes%2Fsellers")
+    root = _decode(flat, flat[0])
+    data = (root.get("routes/sellers") or {}).get("data") or {}
+    sellers_raw = data.get("sellers") or []
+    return [
+        {"accountId": s["accountId"], "accountName": s["accountName"]}
+        for s in sellers_raw
+        if s and s.get("accountId") and s.get("accountName")
+    ]
 
 
-_FIRESTORE = "https://firestore.googleapis.com/v1/projects/digital-auction/databases/(default)/documents"
+def _decode(flat: list, val) -> any:
+    """Recursively decode one turbo-stream value from the flat array."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int):
+        return None if val < 0 else val
+    if isinstance(val, (float, str)) or val is None:
+        return val
+    if isinstance(val, dict):
+        result = {}
+        for k, v in val.items():
+            if not k.startswith("_"):
+                continue
+            key = flat[int(k[1:])]
+            result[key] = None if (isinstance(v, int) and v < 0) else _decode(flat, flat[v])
+        return result
+    if isinstance(val, list):
+        return [
+            None if (isinstance(i, int) and i < 0) else _decode(flat, flat[i])
+            for i in val
+        ]
+    return val
 
 
-def get_item_images(item_key: str) -> list[str]:
+def _parse_auctions_page(html: str) -> dict:
+    """Extract and decode the auctions page loader data from page HTML."""
+    idx = html.find("streamController.enqueue(")
+    if idx == -1:
+        raise ValueError("turbo-stream enqueue not found in page HTML")
+    rest = html[idx + len("streamController.enqueue("):]
+    raw_json_str, _ = json.JSONDecoder().raw_decode(rest.strip())
+    flat = json.loads(raw_json_str)
+    root = _decode(flat, flat[0])
+    loader = root.get("loaderData") or {}
+    return loader.get("pages/auctions/Auctions") or {}
+
+
+def get_listings_page(page: int = 1, seller: str = None, zip_code: str = None) -> dict:
     """
-    Fetch all full_4x3 image URLs for an item from Firestore.
-    Returns a list of URLs ordered by image index.
+    Fetch one page of active inventory from mp.autura.com/auctions.
+    Returns decoded dict with keys: unitListings, soldUnitListings, total, page, perPage.
+    Pass seller=accountId to filter to a single seller.
+    Pass zip_code to include structured city/state in sellerDisclosure.
     """
-    token = get_token()
-    url = f"{_FIRESTORE}/items/{item_key}/images/full_4x3"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            doc = json.loads(r.read())
-        fields = doc.get("fields", {})
-        urls = []
-        for idx in sorted(fields.keys(), key=lambda x: int(x) if x.isdigit() else 999):
-            url_val = (
-                fields[idx]
-                .get("mapValue", {})
-                .get("fields", {})
-                .get("url", {})
-                .get("stringValue")
-            )
-            if url_val:
-                urls.append(url_val)
-        return urls
-    except Exception:
-        return []
+    url = f"{BASE_URL}/auctions?page={page}"
+    if seller:
+        url += f"&seller={seller}"
+    if zip_code:
+        url += f"&zipCode={zip_code}&distance=50"
+    html = _fetch_html(url)
+    return _parse_auctions_page(html)
 
 
-def get_active_region_ids() -> list[str]:
+def get_all_listings() -> list[dict]:
     """
-    Return all region IDs that currently have published vehicles.
-    Covers the entire platform nationwide — no hardcoding required.
+    Fetch and return all active unitListings across all pages.
     """
-    result = _post(_SEARCH_HTTP, "searchEngine-getPublishedVehiclesForFilters", {"limit": 2000})
-    data = result.get("result", {})
-    vehicles = data.get("vehicles", []) if isinstance(data, dict) else []
-    seen = []
-    for v in vehicles:
-        rid = v.get("regionId")
-        if rid and rid not in seen:
-            seen.append(rid)
-    return seen
+    active, _ = get_all_feed()
+    return active
 
 
-def get_auction_series(region_id: str) -> list[dict]:
+def get_all_feed() -> tuple[list[dict], list[dict]]:
     """
-    Fetch all auction series for a region.
+    Fetch all pages once and return (active_listings, sold_listings).
+    Prefer this over get_all_listings() when you also need sold data.
+    """
+    first = get_listings_page(1)
+    total = first.get("total") or 0
+    per_page = first.get("perPage") or 12
+    active = list(first.get("unitListings") or [])
+    sold = list(first.get("soldUnitListings") or [])
 
-    Each series dict contains:
-      series["id"]      – numeric series ID
-      series["key"]     – Firebase RTDB key
-      series["name"]    – seller / series name
-      series["regionId"]
-      series["auctions"] – list of auction objects:
-          auction["auctionId"]  – e.g. "auction-109070"
-          auction["ended"]      – bool
-          auction["endedAt"]    – epoch ms (if ended)
-          auction["sellers"]    – {"JS-225": true, ...}
-          auction["regionId"]
+    total_pages = math.ceil(total / per_page) if per_page else 1
+    for p in range(2, total_pages + 1):
+        page_data = get_listings_page(p)
+        active.extend(page_data.get("unitListings") or [])
+        sold.extend(page_data.get("soldUnitListings") or [])
+
+    return active, sold
+
+
+def get_seller_listings(account_id: str) -> tuple[list[dict], list[dict]]:
     """
-    result = _post(_AUCTIONS_HTTP, "auction-getAuctionSeries", {"regionId": region_id})
-    return result.get("result", [])
+    Fetch active + sold listings for a single seller via ?seller= filter.
+    Much faster than fetching all 16 pages when we only need one seller.
+    Returns (active_listings, sold_listings).
+    """
+    first = get_listings_page(1, seller=account_id)
+    total = first.get("total") or 0
+    per_page = first.get("perPage") or 12
+    active = list(first.get("unitListings") or [])
+    sold = list(first.get("soldUnitListings") or [])
+
+    total_pages = math.ceil(total / per_page) if per_page else 1
+    for p in range(2, total_pages + 1):
+        page_data = get_listings_page(p, seller=account_id)
+        active.extend(page_data.get("unitListings") or [])
+        sold.extend(page_data.get("soldUnitListings") or [])
+
+    return active, sold
+
+
+def get_sold_listings(page: int = 1) -> list[dict]:
+    """
+    Return soldUnitListings from a single page of the inventory feed.
+    """
+    data = get_listings_page(page)
+    return data.get("soldUnitListings") or []
+
+
+def get_listing_detail(unit_listing_id: str) -> dict:
+    """
+    Fetch a single listing detail page from /auctions/listings/{unit_listing_id}.
+    Returns the decoded loader data dict (structure TBD from devtools).
+    """
+    html = _fetch_html(f"{BASE_URL}/auctions/listings/{unit_listing_id}")
+    idx = html.find("streamController.enqueue(")
+    if idx == -1:
+        raise ValueError("turbo-stream enqueue not found in detail page HTML")
+    rest = html[idx + len("streamController.enqueue("):]
+    raw_json_str, _ = json.JSONDecoder().raw_decode(rest.strip())
+    flat = json.loads(raw_json_str)
+    root = _decode(flat, flat[0])
+    return root.get("loaderData") or {}

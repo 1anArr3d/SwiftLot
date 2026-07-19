@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
-import { REGION_LABEL, STATE_LABEL, getState, REGION_PHOTOS } from '../constants';
+import { REGION_LABEL, REGION_PHOTOS } from '../constants';
 
 const cityPhotos = import.meta.glob('../assets/cityphotos/Photos/*.jpg', { eager: true });
 
@@ -83,9 +83,10 @@ const AuctionsPage = () => {
   const active = auctions
     .filter(a => a.auction_status !== 'completed' && a.vehicles_listed > 0)
     .sort((a, b) => (a.closes_at || FAR_FUTURE).localeCompare(b.closes_at || FAR_FUTURE));
-  const states = [...new Set(active.map(a => getState(a.region_id)))].sort();
+  const getStateLabel = (a) => a.seller_state || a.region_id;
+  const states = [...new Set(active.map(getStateLabel))].sort();
   const byState = states.reduce((acc, s) => {
-    acc[s] = active.filter(a => getState(a.region_id) === s);
+    acc[s] = active.filter(a => getStateLabel(a) === s);
     return acc;
   }, {});
 
@@ -103,13 +104,12 @@ const AuctionsPage = () => {
         const stateAuctions = byState[state];
         if (!stateAuctions.length) return null;
         const isOpen = openStates.has(state);
-        const stateLabel = STATE_LABEL[state] || state;
         const regions = [...new Set(stateAuctions.map(a => a.region_id))].sort();
 
         return (
           <div key={state} className="state-section">
             <div className="state-section-header" onClick={() => toggleState(state)}>
-              <span className="state-section-label">{stateLabel}</span>
+              <span className="state-section-label">{state}</span>
               <div className="state-section-right">
                 <span className="state-section-count">{stateAuctions.length} auction{stateAuctions.length !== 1 ? 's' : ''}</span>
                 <span className="state-section-toggle">{isOpen ? '▲' : '▼'}</span>

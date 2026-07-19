@@ -6,6 +6,8 @@ class Auction(BaseModel):
     auction_id: str
     region_id: Optional[str] = None
     seller_name: Optional[str] = None
+    seller_city: Optional[str] = None
+    seller_state: Optional[str] = None
     auction_status: Optional[str] = None
     vehicles_listed: Optional[int] = None
     last_discovered: Optional[str] = None
