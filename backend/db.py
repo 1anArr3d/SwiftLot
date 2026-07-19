@@ -174,6 +174,16 @@ def init_db():
             PRIMARY KEY (auction_id, user_id)
         )''')
 
+        conn.execute('''CREATE TABLE IF NOT EXISTS sellers (
+            account_id              TEXT PRIMARY KEY,
+            account_name            TEXT,
+            seller_disclosure_id    TEXT,
+            selling_config          TEXT,
+            seller_city             TEXT,
+            seller_state            TEXT,
+            last_synced_at          TEXT
+        )''')
+
     with get_db() as conn:
         conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP")
         conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS seller_city TEXT")

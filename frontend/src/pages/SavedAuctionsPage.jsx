@@ -124,7 +124,7 @@ const SavedAuctionsPage = () => {
                 <div className="auction-card-footer">
                   <a
                     className="btn"
-                    href={`https://app.marketplace.autura.com/auction/${a.region_id}/${a.auction_id}`}
+                    href={`https://mp.autura.com/auctions?seller=${a.region_id}`}
                     target="_blank"
                     rel="noreferrer"
                     onClick={e => e.stopPropagation()}

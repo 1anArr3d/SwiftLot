@@ -71,8 +71,3 @@ class OdometerEntry(BaseModel):
     vin: str
     inspection_date: Optional[str] = None
     mileage: Optional[int] = None
-
-
-class JobStatus(BaseModel):
-    id: str
-    status: str

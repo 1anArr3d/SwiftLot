@@ -179,6 +179,8 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
 
 def _save_history(vin: str, results: list[dict]):
     if not results:
+        with get_db() as conn:
+            conn.execute("UPDATE vehicles SET last_recorded_odo = 'N/A' WHERE vin = %s", (vin,))
         return
     with get_db() as conn:
         for i, res in enumerate(results):
