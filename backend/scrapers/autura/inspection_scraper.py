@@ -75,7 +75,7 @@ def _acquire_session() -> cffi_requests.Session:
     """Launch browser, solve Turnstile once, return HTTP session with cookie."""
     print("[inspection] Launching browser to solve Turnstile...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, args=["--disable-blink-features=AutomationControlled"])
+        browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         page = browser.new_page()
         page.goto("https://www.mytxcar.org/TXCar_Net/VehicleTestDetail.aspx", timeout=60000)
 

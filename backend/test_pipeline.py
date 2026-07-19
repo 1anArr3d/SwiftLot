@@ -21,7 +21,7 @@ def test_feed():
     """Fetch page 1 of the authenticated feed and show key fields on the first listing."""
     import json
     print("\n── Feed (page 1) ─────────────────────────────")
-    from autura_api import get_listings_page
+    from scrapers.autura.autura_api import get_listings_page
     page     = get_listings_page(1)
     total    = page.get("total", 0)
     per_page = page.get("perPage", 0)
@@ -58,7 +58,7 @@ def test_detail():
     """
     import json
     print("\n── Listing detail (single vehicle) ──────────")
-    from autura_api import get_listings_page, get_listing_detail
+    from scrapers.autura.autura_api import get_listings_page, get_listing_detail
 
     page = get_listings_page(1)
     listings = page.get("unitListings") or []
@@ -85,7 +85,7 @@ def test_detail():
     if result["current_bid"] is None and result["status"] is None:
         print("\n  ⚠ both fields null — detail page may need auth or the route key changed")
         print("  falling back to raw HTML inspection...")
-        from autura_api import _fetch_html, _decode
+        from scrapers.autura.autura_api import _fetch_html, _decode
         html = _fetch_html(f"https://mp.autura.com/auctions/listings/{item_key}")
         idx  = html.find("streamController.enqueue(")
         if idx == -1:
@@ -116,7 +116,7 @@ def test_detail():
 def test_sellers():
     """Fetch seller registry — shows account names but no location data."""
     print("\n── Sellers ───────────────────────────────────")
-    from autura_api import get_all_sellers
+    from scrapers.autura.autura_api import get_all_sellers
     sellers = get_all_sellers()
     print(f"  {len(sellers)} sellers in registry")
     for s in sellers[:5]:
@@ -132,7 +132,7 @@ def test_scrape():
     print("\n── Full feed scrape → DB ─────────────────────")
     from db import init_db
     init_db()
-    from feed_scraper import run_full_feed
+    from scrapers.autura.feed_scraper import run_full_feed
     result = run_full_feed()
     print(f"  vehicles={result['vehicles']}  auctions={result['auctions']}  sold={result['sold']}")
 
@@ -183,7 +183,7 @@ def test_ping():
         return
 
     # Run the actual ping handler directly
-    import auction_listener as listener
+    from scrapers.autura import auction_listener as listener
     import asyncio
 
     async def _run():
@@ -239,7 +239,7 @@ def test_rewind():
     from curl_cffi import requests as cffi_requests
     print("\n── Ably rewind ───────────────────────────────")
 
-    from autura_api import get_listings_page
+    from scrapers.autura.autura_api import get_listings_page
     page     = get_listings_page(1)
     listings = page.get("unitListings") or []
     if not listings:

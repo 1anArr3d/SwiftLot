@@ -8,10 +8,10 @@ from slowapi.errors import RateLimitExceeded
 from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
-import feed_scraper as scraper
+from scrapers.autura import feed_scraper as scraper
 
 from routes import router
-import auction_listener as listener
+from scrapers.autura import auction_listener as listener
 import asyncio
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])

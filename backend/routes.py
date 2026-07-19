@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from db import query, get_db
 from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction
-import auction_listener as listener
+from scrapers.autura import auction_listener as listener
 import asyncio
 import json
 
