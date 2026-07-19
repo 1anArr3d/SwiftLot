@@ -1,14 +1,9 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
-from auth import get_current_user, require_admin
+from auth import get_current_user
 from db import query, get_db
-from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction, JobStatus
-from state import scrape_status, discovery_status, inspection_status
-import auction_scraper as scraper
-import inspection_scraper as inspection
-import auction_discovery as discovery
-import bid_listener as listener
-import threading
+from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction
+import auction_listener as listener
 import asyncio
 import json
 
@@ -42,13 +37,6 @@ def get_auction(auction_id: str):
         raise HTTPException(status_code=404, detail="Auction not found")
     return dict(row)
 
-
-@router.delete("/auctions", tags=["auctions"])
-def delete_auctions(user_id: str = Depends(require_admin)):
-    with get_db() as conn:
-        conn.execute("DELETE FROM vehicles")
-        conn.execute("DELETE FROM auctions")
-    return {"status": "cleared"}
 
 
 @router.get("/auctions/{auction_id}/vehicles", response_model=list[Vehicle], tags=["auctions"])
@@ -288,11 +276,10 @@ def unsave_auction(auction_id: str, user_id: str = Depends(get_current_user)):
 @router.get("/stream/multi", tags=["stream"])
 async def stream_multi_auctions(auctions: str = ""):
     """
-    Single SSE connection for live bid updates across multiple auctions.
+    SSE stream for live updates across multiple auctions.
     Query param: auctions=id1,id2,id3
-    Emits: {"type":"bid","auction_id":..,"item_key":..,"amount":..,"expires":..}
-    Emits: {"type":"ended","auction_id":..}  when an individual auction ends
-    Skips auctions with auction_status='completed'.
+    Emits: {"type":"update","auction_id":..,"vehicles":[{item_key,current_bid,bid_expiration},...]}
+    Emits: {"type":"ended","auction_id":..}
     """
     auction_ids = [a.strip() for a in auctions.split(",") if a.strip()]
     if not auction_ids:
@@ -324,29 +311,24 @@ async def stream_multi_auctions(auctions: str = ""):
         async def drain(aid, q):
             while True:
                 event = await q.get()
-                await merged.put((aid, event))
+                await merged.put(event)
                 if event.get("type") == "ended":
                     break
 
         tasks = [asyncio.create_task(drain(aid, q)) for aid, q in per_auction_queues.items()]
 
-        # Snapshot current state for each active auction
+        # Send one snapshot per auction on connect
         for aid in active_ids:
-            vehicle_rows = query(
-                "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = %s", (aid,)
-            )
-            for r in vehicle_rows:
-                if r["item_key"] and r["current_bid"] is not None:
-                    yield f"data: {json.dumps({'type': 'bid', 'auction_id': aid, 'item_key': r['item_key'], 'amount': r['current_bid'], 'expires': r['bid_expiration']})}\n\n"
+            yield f"data: {json.dumps(listener._vehicle_snapshot(aid))}\n\n"
 
         remaining = set(active_ids)
         try:
             while remaining:
                 try:
-                    aid, event = await asyncio.wait_for(merged.get(), timeout=25)
-                    yield f"data: {json.dumps({**event, 'auction_id': aid})}\n\n"
+                    event = await asyncio.wait_for(merged.get(), timeout=25)
+                    yield f"data: {json.dumps(event)}\n\n"
                     if event.get("type") == "ended":
-                        remaining.discard(aid)
+                        remaining.discard(event.get("auction_id"))
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
         finally:
@@ -363,37 +345,27 @@ async def stream_multi_auctions(auctions: str = ""):
 
 
 @router.get("/stream/auction/{auction_id}", tags=["stream"])
-async def stream_auction_bids(auction_id: str):
+async def stream_auction_updates(auction_id: str):
     """
-    Server-sent events stream for live bid updates on an auction.
-    Emits: {"type":"bid","item_key":..,"amount":..,"expires":..}
-    Emits: {"type":"status","auction_status":..}  when status changes
-    Emits: {"type":"ended"}  when auction completes
-    No auth required — bids are public information.
+    SSE stream for live updates on a single auction.
+    Emits: {"type":"update","auction_id":..,"vehicles":[{item_key,current_bid,bid_expiration},...]}
+    Emits: {"type":"ended","auction_id":..}
     """
     async def event_gen():
+        auction = query(
+            "SELECT auction_status FROM auctions WHERE auction_id = %s",
+            (auction_id,), one=True
+        )
+        if auction and auction["auction_status"] == "completed":
+            yield f"data: {json.dumps({'type': 'ended', 'auction_id': auction_id})}\n\n"
+            return
+
         queue = asyncio.Queue()
         listener.add_client(auction_id, queue)
         try:
-            # Snapshot current state on connect so client isn't stale
-            rows = query(
-                "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = %s",
-                (auction_id,)
-            )
-            auction = query(
-                "SELECT auction_status FROM auctions WHERE auction_id = %s",
-                (auction_id,), one=True
-            )
-            for r in rows:
-                if r["item_key"] and r["current_bid"] is not None:
-                    yield f"data: {json.dumps({'type': 'bid', 'item_key': r['item_key'], 'amount': r['current_bid'], 'expires': r['bid_expiration']})}\n\n"
-            if auction:
-                if auction['auction_status'] == 'completed':
-                    yield f"data: {json.dumps({'type': 'ended'})}\n\n"
-                    return
-                yield f"data: {json.dumps({'type': 'status', 'auction_status': auction['auction_status']})}\n\n"
+            # Snapshot on connect
+            yield f"data: {json.dumps(listener._vehicle_snapshot(auction_id))}\n\n"
 
-            # Stream events pushed by bid_listener — no polling, no sleep
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=25)
@@ -411,94 +383,3 @@ async def stream_auction_bids(auction_id: str):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-
-# ── Jobs ──────────────────────────────────────────────────────────────────────
-
-def _run_scrape(auction_id: str, region_id: str):
-    try:
-        scrape_status[auction_id] = "running"
-        count = scraper.scrape_auction(auction_id)
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE auctions SET last_scraped_count = %s, vehicles_listed = %s, last_scraped_at = NOW() WHERE auction_id = %s",
-                (count, count, auction_id)
-            )
-        scrape_status[auction_id] = "done"
-    except Exception as e:
-        print(f"[scrape] ERROR for {auction_id}: {e}")
-        scrape_status[auction_id] = "failed"
-
-
-def _run_inspection(vin: str):
-    try:
-        inspection_status[vin] = "running"
-        inspection.run_inspection_batch([vin])
-        inspection_status[vin] = "done"
-    except Exception as e:
-        print(f"[inspection] ERROR for {vin}: {e}")
-        inspection_status[vin] = "failed"
-
-
-def _run_discovery(key: str):
-    try:
-        discovery_status[key] = "running"
-        discovery.run_discovery()
-        discovery_status[key] = "done"
-    except Exception as e:
-        print(f"[discovery] ERROR: {e}")
-        discovery_status[key] = "failed"
-
-
-@router.post("/scrape/{auction_id}", tags=["jobs"])
-def start_scrape(auction_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
-    row = query("SELECT region_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
-    if not row:
-        raise HTTPException(status_code=404, detail="Auction not found")
-    if scrape_status.get(auction_id) == "running":
-        raise HTTPException(status_code=409, detail="Scrape already in progress")
-    background_tasks.add_task(_run_scrape, auction_id, row["region_id"])
-    return {"status": "started", "auction_id": auction_id}
-
-
-@router.get("/scrape/{auction_id}/status", response_model=JobStatus, tags=["jobs"])
-def get_scrape_status(auction_id: str, user_id: str = Depends(require_admin)):
-    status = scrape_status.get(auction_id)
-    if status is None:
-        raise HTTPException(status_code=404, detail="No scrape job found")
-    return {"id": auction_id, "status": status}
-
-
-@router.post("/inspectionscrape/{vin}", tags=["jobs"])
-def start_inspection(vin: str, background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
-    background_tasks.add_task(_run_inspection, vin)
-    return {"status": "started", "vin": vin}
-
-
-@router.get("/inspectionscrape/{vin}/status", response_model=JobStatus, tags=["jobs"])
-def get_inspection_status(vin: str, user_id: str = Depends(require_admin)):
-    status = inspection_status.get(vin)
-    if status is None:
-        raise HTTPException(status_code=404, detail="No inspection job found")
-    return {"id": vin, "status": status}
-
-
-@router.post("/discovery/run", tags=["jobs"])
-def start_discovery(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
-    if discovery_status.get("global") == "running":
-        raise HTTPException(status_code=409, detail="Discovery already in progress")
-    background_tasks.add_task(_run_discovery, "global")
-    return {"status": "started"}
-
-
-@router.get("/discovery/status", response_model=JobStatus, tags=["jobs"])
-def get_discovery_status(user_id: str = Depends(require_admin)):
-    status = discovery_status.get("global")
-    if status is None:
-        raise HTTPException(status_code=404, detail="No discovery job found")
-    return {"id": "global", "status": status}
-
-
-@router.post("/pipeline/run", tags=["jobs"])
-def run_full_pipeline(background_tasks: BackgroundTasks, user_id: str = Depends(require_admin)):
-    background_tasks.add_task(_run_discovery, "global")
-    return {"status": "started"}

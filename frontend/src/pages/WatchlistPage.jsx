@@ -68,6 +68,12 @@ const WatchlistPage = () => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'bid') {
           setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
+        } else if (msg.type === 'update') {
+          setLiveBids(prev => {
+            const next = { ...prev };
+            (msg.vehicles || []).forEach(v => { if (v.item_key) next[v.item_key] = { amount: v.current_bid, expires: v.bid_expiration }; });
+            return next;
+          });
         }
       };
       source.onerror = () => {
@@ -276,12 +282,10 @@ const WatchlistPage = () => {
                                   View Auction
                                 </button>
                               )}
-                              {car.auction_id && car.region_id && (
+                              {car.item_key && (
                                 <a
                                   className="btn"
-                                  href={car.item_id
-                                    ? `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}/vehicle/${car.item_id}`
-                                    : `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}`}
+                                  href={`https://mp.autura.com/auctions/listings/${car.item_key}`}
                                   target="_blank"
                                   rel="noreferrer"
                                   onClick={e => e.stopPropagation()}

@@ -3,7 +3,6 @@ Autura Marketplace API client — mp.autura.com.
 
 Fetches HTML pages from the inventory feed, extracts the embedded
 React Router turbo-stream payload, and decodes it into plain dicts.
-No separate API calls needed — all data is server-rendered.
 
 See docs/autura_mp_api.md for full structure reference.
 """
@@ -14,15 +13,20 @@ from curl_cffi import requests as cffi_requests
 BASE_URL = "https://mp.autura.com"
 
 
+def _auth_cookies() -> dict:
+    from config import AUTURA_COOKIES
+    return AUTURA_COOKIES
+
+
 def _fetch_html(url: str) -> str:
-    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30)
+    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30, cookies=_auth_cookies())
     resp.raise_for_status()
     return resp.text
 
 
 def _fetch_flat(url: str) -> list:
     """Fetch a .data endpoint that returns a turbo-stream JSON array directly."""
-    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30)
+    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30, cookies=_auth_cookies())
     resp.raise_for_status()
     return json.loads(resp.text)
 
@@ -80,33 +84,27 @@ def _parse_auctions_page(html: str) -> dict:
     return loader.get("pages/auctions/Auctions") or {}
 
 
-def get_listings_page(page: int = 1, seller: str = None, zip_code: str = None) -> dict:
+def get_listings_page(page: int = 1, seller: str = None) -> dict:
     """
     Fetch one page of active inventory from mp.autura.com/auctions.
     Returns decoded dict with keys: unitListings, soldUnitListings, total, page, perPage.
     Pass seller=accountId to filter to a single seller.
-    Pass zip_code to include structured city/state in sellerDisclosure.
     """
     url = f"{BASE_URL}/auctions?page={page}"
     if seller:
         url += f"&seller={seller}"
-    if zip_code:
-        url += f"&zipCode={zip_code}&distance=50"
-    html = _fetch_html(url)
-    return _parse_auctions_page(html)
+    return _parse_auctions_page(_fetch_html(url))
 
 
 def get_all_listings() -> list[dict]:
-    """
-    Fetch and return all active unitListings across all pages.
-    """
+    """Fetch and return all active unitListings across all pages."""
     active, _ = get_all_feed()
     return active
 
 
 def get_all_feed() -> tuple[list[dict], list[dict]]:
     """
-    Fetch all pages once and return (active_listings, sold_listings).
+    Fetch all pages and return (active_listings, sold_listings).
     Prefer this over get_all_listings() when you also need sold data.
     """
     first = get_listings_page(1)
@@ -124,10 +122,43 @@ def get_all_feed() -> tuple[list[dict], list[dict]]:
     return active, sold
 
 
+def get_listing_detail(item_key: str) -> dict:
+    """
+    Fetch a single listing's current bid by scraping its detail page HTML.
+    Returns {"current_bid": float|None, "bid_expiration": str|None, "status": str|None}.
+    Called on every Ably ping for each vehicle in the pinged auction.
+    """
+    html = _fetch_html(f"{BASE_URL}/auctions/listings/{item_key}")
+    idx = html.find("streamController.enqueue(")
+    if idx == -1:
+        return {"current_bid": None, "bid_expiration": None, "status": None}
+    rest = html[idx + len("streamController.enqueue("):]
+    raw_json_str, _ = json.JSONDecoder().raw_decode(rest.strip())
+    flat = json.loads(raw_json_str)
+    root = _decode(flat, flat[0])
+    loader = root.get("loaderData") or {}
+    for v in loader.values():
+        if not isinstance(v, dict):
+            continue
+        ul      = v.get("unitListing") or {}
+        bidding = ul.get("biddingInfo") or {}
+        if not bidding:
+            continue
+        winning = bidding.get("winningBid") or {}
+        info    = bidding.get("auctionInfo") or {}
+        cents   = winning.get("amountCents")
+        return {
+            "current_bid":    cents / 100 if cents is not None else None,
+            "bid_expiration": info.get("biddingEndUtc"),
+            "status":         bidding.get("biddingStatus"),
+        }
+    return {"current_bid": None, "bid_expiration": None, "status": None}
+
+
 def get_seller_listings(account_id: str) -> tuple[list[dict], list[dict]]:
     """
     Fetch active + sold listings for a single seller via ?seller= filter.
-    Much faster than fetching all 16 pages when we only need one seller.
+    Much faster than fetching all pages when we only need one seller.
     Returns (active_listings, sold_listings).
     """
     first = get_listings_page(1, seller=account_id)
@@ -143,27 +174,3 @@ def get_seller_listings(account_id: str) -> tuple[list[dict], list[dict]]:
         sold.extend(page_data.get("soldUnitListings") or [])
 
     return active, sold
-
-
-def get_sold_listings(page: int = 1) -> list[dict]:
-    """
-    Return soldUnitListings from a single page of the inventory feed.
-    """
-    data = get_listings_page(page)
-    return data.get("soldUnitListings") or []
-
-
-def get_listing_detail(unit_listing_id: str) -> dict:
-    """
-    Fetch a single listing detail page from /auctions/listings/{unit_listing_id}.
-    Returns the decoded loader data dict (structure TBD from devtools).
-    """
-    html = _fetch_html(f"{BASE_URL}/auctions/listings/{unit_listing_id}")
-    idx = html.find("streamController.enqueue(")
-    if idx == -1:
-        raise ValueError("turbo-stream enqueue not found in detail page HTML")
-    rest = html[idx + len("streamController.enqueue("):]
-    raw_json_str, _ = json.JSONDecoder().raw_decode(rest.strip())
-    flat = json.loads(raw_json_str)
-    root = _decode(flat, flat[0])
-    return root.get("loaderData") or {}

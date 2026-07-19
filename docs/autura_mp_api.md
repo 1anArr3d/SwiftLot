@@ -89,13 +89,9 @@ Each item in `unitListings` decodes to:
   },
 
   "sellerInfo": {
-    "sellerName": "Roberts Heavy Duty Towing",
-    "locationName": "Roberts Heavy Duty Towing (757 E 7th St, Lexington, KY 40505)",
-    "address": "757 E 7th St, Lexington, KY 40505",
-    "city": "Lexington",
-    "state": "KY",
-    "zipcode": "40505",
-    "timezone": null
+    "sellerName": "Roberts Heavy Duty Towing"
+    // NOTE: city/state/address are NOT present in anonymous requests.
+    // They appear only in authenticated responses (see Seller Address Data section).
   },
 
   "biddingInfo": {
@@ -268,10 +264,105 @@ Originals archived in `backend/legacy/`.
 
 ---
 
-## Next Steps
+## Seller Address Data — Auth Requirement (investigated 2026-07-17)
 
-1. **Inventory scraper** (`auction_scraper.py`) — fetch all pages from `/auctions?page=N`, parse turbo-stream, write to DB
-2. **Discovery** (`auction_discovery.py`) — derive from inventory feed (group by `auctionId`)
-3. **Live bid listener** (`rtdb_listener.py`) — reverse engineer SSE endpoint from devtools
-4. **Historical harvester** (`historical_harvester.py`) — needs `soldUnitListings` capture strategy
-5. **DB schema** — `auction_id` and `region_id` column types/values will change
+### Summary
+
+Structured city/state/address in `sellerDisclosure` is **server-side enriched only for authenticated sessions** where the user has a saved zip code in their profile. Anonymous requests never include these fields, regardless of URL params.
+
+### Two separate systems
+
+| Mechanism | Effect |
+|---|---|
+| `?zipCode=78202&distance=50` URL params | Client-side distance sorting/filtering only — reduces result count, does NOT add address fields |
+| Session JWT with saved `userLocation.zipCode` | Server injects `city`, `state`, `address`, `zipcode` into every `sellerDisclosure` in the turbo-stream |
+
+### sellerDisclosure structure (authenticated)
+
+```json
+"sellerDisclosure": {
+  "sellerDisclosureId": "01kxj0qnf93h96ssx6j96pxp6a",
+  "accountId": "01kxd60vmsnb3c2xcw38x1xe6m",
+  "address": "422 Steves Ave, San Antonio, TX 78204",
+  "locationName": "Txtow Corp",
+  "city": "San Antonio",
+  "state": "TX",
+  "zipcode": "78204",
+  "timezone": null
+}
+```
+
+### sellerDisclosure structure (anonymous)
+
+Same object — but `address`, `city`, `state`, `zipcode` fields are **completely absent** from the flat array (not null, not present at all).
+
+### Anonymous vs authenticated feed
+
+| | Anonymous | Authenticated |
+|---|---|---|
+| `perPage` | 12 | 48 |
+| `city`/`state` in sellerDisclosure | absent | present |
+| `sellerInfo` | null (buyer account sees null) | present with sellerName |
+| `userLocation` in stream | absent | `{"zipCode": "78211"}` (saved profile zip) |
+
+### What was tried
+
+- `?zipCode=78202&distance=50` anonymous → no address fields (flat array len 753 vs 803, both `has_city=False`)
+- Authenticated buyer request to `/auctions` → routes to MyAutura dashboard, `unitListings: []`
+- `sellerInfo` is null for buyer accounts — sellers only see their own seller profile
+- `/seller-disclosures/{id}` → 404
+- `/sellers/{accountId}` profile page → 404 anonymous
+- `.data` endpoints with auth → 202 Cloudflare challenge
+
+The only working path: authenticated request to `/auctions` (not `.data`) with a `user-session` cookie belonging to an account that has a saved home zip code — this returns the full feed with all seller addresses.
+
+---
+
+## Seller Registry — /sellers.data
+
+```
+GET https://mp.autura.com/sellers.data?_routes=routes%2Fsellers
+```
+
+Returns a flat turbo-stream array (not HTML). Decodes to:
+```json
+{
+  "routes/sellers": {
+    "data": {
+      "sellers": [
+        { "accountId": "01kxd60vmsnb3c2xcw38x1xe6m", "accountName": "Txtow Corp" },
+        ...
+      ]
+    }
+  }
+}
+```
+
+- Works **unauthenticated** — no session required
+- Returns all registered sellers (name + accountId)
+- Seller `accountId` values are **stable** — sellers register once and their ID never changes
+- Used to backfill `seller_name` for any auction whose name is null
+
+---
+
+## Seller Location Strategy
+
+Because seller IDs are stable (registered accounts, not ephemeral), city/state can be treated as permanent once populated:
+
+1. **Normal scraper runs** operate anonymously — `seller_city`/`seller_state` will be null for new sellers
+2. **Backfill runs** set `AUTURA_SESSION` env var to a valid `user-session` JWT and run the scraper — the authenticated feed includes city/state in every `sellerDisclosure`, which `upsert_auction` saves via `COALESCE` (never overwrites an existing value)
+3. **Trigger condition**: run a backfill whenever `SELECT COUNT(*) FROM auctions WHERE seller_city IS NULL AND seller_state IS NULL` returns > 0 after a normal scrape
+4. The session cookie expires ~1 hour after login; refresh from browser DevTools → Application → Cookies → `user-session`
+
+---
+
+## Current Implementation Status (as of 2026-07-17)
+
+| File | Status |
+|---|---|
+| `autura_api.py` | Full — HTML fetch, turbo-stream decode, all feed/seller endpoints, optional `cookies` param |
+| `auction_scraper.py` | Full — vehicles + auctions upsert, ended-auction harvester, `AUTURA_SESSION` env var support |
+| `auction_discovery.py` | Full — auction upsert from listings, `sync_seller_names` from seller registry |
+| `historical_harvester.py` | Full — harvests sold listings into `historical_sales` on auction end |
+| `bid_listener.py` | Full — Ably SSE listener for live bid updates |
+| `periodic_scraper.py` | Full — scheduled scraper runs |

@@ -8,12 +8,10 @@ from slowapi.errors import RateLimitExceeded
 from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
-import historical_harvester as harvester
-import auction_discovery as discovery
-import auction_scraper as scraper
+import feed_scraper as scraper
 
 from routes import router
-import bid_listener as listener
+import auction_listener as listener
 import asyncio
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
@@ -24,10 +22,7 @@ async def lifespan(app: FastAPI):
     init_db()
     listener.set_event_loop(asyncio.get_running_loop())
 
-    # One-time catch-up for auctions that ended while the server was down
-    threading.Thread(target=harvester.harvest_sold, daemon=True).start()
-
-    # Discover all active auctions then subscribe
+    # Initial full scrape + subscribe
     def _startup():
         listener.sync_with_db()       # immediately subscribe with what's in DB
         scraper.scrape_all()          # populate vehicles + discover auctions
@@ -35,7 +30,7 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_startup, daemon=True).start()
     listener.start_watchdog(interval=30)
     listener.start_retry_checker()
-    listener.start_bid_reconciler(interval=600)
+    listener.start_reconciler(interval=600)
     listener.start_periodic_scraper(interval=7200)
 
     yield

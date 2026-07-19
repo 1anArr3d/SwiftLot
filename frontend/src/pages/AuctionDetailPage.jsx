@@ -75,6 +75,12 @@ const AuctionDetailPage = () => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'bid') {
           setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
+        } else if (msg.type === 'update') {
+          setLiveBids(prev => {
+            const next = { ...prev };
+            (msg.vehicles || []).forEach(v => { if (v.item_key) next[v.item_key] = { amount: v.current_bid, expires: v.bid_expiration }; });
+            return next;
+          });
         } else if (msg.type === 'status') {
           setAuction(prev => prev ? { ...prev, auction_status: msg.auction_status } : prev);
         } else if (msg.type === 'ended') {
@@ -252,7 +258,7 @@ const AuctionDetailPage = () => {
             {auction && (
               <a
                 className="btn"
-                href={`https://app.marketplace.autura.com/auction/${auction.region_id}/${id}`}
+                href={`https://mp.autura.com/auctions?seller=${auction?.region_id}`}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -331,9 +337,7 @@ const AuctionDetailPage = () => {
                             <div className="expanded-actions">
                               <a
                                 className="btn"
-                                href={car.item_id
-                                  ? `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}/vehicle/${car.item_id}`
-                                  : `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}`}
+                                href={`https://mp.autura.com/auctions/listings/${car.item_key}`}
                                 target="_blank"
                                 rel="noreferrer"
                                 onClick={e => e.stopPropagation()}
