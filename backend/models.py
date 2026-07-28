@@ -11,10 +11,6 @@ class Auction(BaseModel):
     auction_status: Optional[str] = None
     vehicles_listed: Optional[int] = None
     last_discovered: Optional[str] = None
-    last_scraped_count: Optional[int] = None
-    series_key: Optional[str] = None
-    minimum_bid: Optional[float] = None
-    sales_tax: Optional[float] = None
     ended_at: Optional[str] = None
     closes_at: Optional[str] = None
 
@@ -57,9 +53,10 @@ class GarageVehicle(Vehicle):
 
 
 class SavedAuction(BaseModel):
-    auction_id: str
-    region_id: Optional[str] = None
+    region_id: str
     seller_name: Optional[str] = None
+    seller_city: Optional[str] = None
+    seller_state: Optional[str] = None
     auction_status: Optional[str] = None
     vehicles_listed: Optional[int] = None
     closes_at: Optional[str] = None

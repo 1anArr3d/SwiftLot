@@ -9,7 +9,7 @@ from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
 from scrapers.autura import feed_scraper as scraper
-
+from scrapers.autura.feed_scraper import run_sold_backfill
 from routes import router
 from scrapers.autura import auction_listener as listener
 import asyncio
@@ -24,14 +24,38 @@ async def lifespan(app: FastAPI):
 
     # Initial full scrape + subscribe
     def _startup():
-        listener.sync_with_db()       # immediately subscribe with what's in DB
-        scraper.scrape_all()          # populate vehicles + discover auctions
-        listener.sync_with_db()       # pick up any newly discovered auctions
+        listener.sync_with_db()
+        try:
+            scraper.scrape_all()
+            listener.sync_with_db()
+        except Exception as e:
+            print(f"[autura] Startup scrape failed: {e}")
+        try:
+            from scrapers.autura.inspection_scraper import run_inspection_batch
+            from db import query
+            rows = query(
+                "SELECT v.vin FROM vehicles v "
+                "JOIN auctions a ON a.auction_id = v.auction_id "
+                "WHERE v.last_recorded_odo IS NULL AND a.seller_state = 'TX'"
+            )
+            vins = [r["vin"] for r in rows]
+            if vins:
+                print(f"[inspection] Startup batch: {len(vins)} unchecked TX vehicles")
+                run_inspection_batch(vins)
+        except Exception as e:
+            print(f"[inspection] Startup batch failed: {e}")
     threading.Thread(target=_startup, daemon=True).start()
     listener.start_watchdog(interval=30)
-    listener.start_retry_checker()
-    listener.start_reconciler(interval=600)
     listener.start_periodic_scraper(interval=7200)
+
+    def _sold_backfill():
+        while True:
+            try:
+                run_sold_backfill()
+            except Exception as e:
+                print(f"[sold-backfill] Failed: {e}")
+            threading.Event().wait(604800)   # weekly
+    threading.Thread(target=_sold_backfill, daemon=True, name="sold-backfill").start()
 
     yield
 

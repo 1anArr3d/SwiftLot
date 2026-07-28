@@ -110,6 +110,13 @@ const App = () => (
         <Route path="/watchlist" element={<ProtectedRoute><SavedAuctionsPage /></ProtectedRoute>} />
         <Route path="/my-garage" element={<ProtectedRoute><WatchlistPage /></ProtectedRoute>} />
         <Route path="/about" element={<AboutPage />} />
+        <Route path="*" element={
+          <div style={{ padding: '64px 32px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 48, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>404</div>
+            <div style={{ fontSize: 18, marginBottom: 24 }}>Page not found.</div>
+            <a href="/" style={{ color: 'var(--steel-highlight)' }}>Back to home</a>
+          </div>
+        } />
       </Routes>
     </AuthProvider>
   </BrowserRouter>

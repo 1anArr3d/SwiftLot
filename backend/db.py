@@ -64,20 +64,14 @@ def query(sql: str, args: tuple = (), one: bool = False):
 def init_db():
     with get_db() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
-            auction_id         TEXT PRIMARY KEY,
-            region_id          TEXT,
-            seller_name        TEXT,
-            auction_status     TEXT,
-            vehicles_listed    INTEGER,
-            last_discovered    TEXT,
-            last_scraped_count INTEGER,
-            last_scraped_at    TEXT,
-            series_key         TEXT,
-            minimum_bid        DOUBLE PRECISION,
-            sales_tax          DOUBLE PRECISION,
-            ended_at           TEXT,
-            closes_at          TEXT,
-            harvested          INTEGER DEFAULT 0
+            auction_id      TEXT PRIMARY KEY,
+            region_id       TEXT,
+            seller_name     TEXT,
+            auction_status  TEXT,
+            vehicles_listed INTEGER,
+            last_discovered TEXT,
+            ended_at        TEXT,
+            closes_at       TEXT
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS vehicles (
@@ -174,20 +168,17 @@ def init_db():
             PRIMARY KEY (auction_id, user_id)
         )''')
 
-        conn.execute('''CREATE TABLE IF NOT EXISTS sellers (
-            account_id              TEXT PRIMARY KEY,
-            account_name            TEXT,
-            seller_disclosure_id    TEXT,
-            selling_config          TEXT,
-            seller_city             TEXT,
-            seller_state            TEXT,
-            last_synced_at          TEXT
-        )''')
-
     with get_db() as conn:
-        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMP")
         conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS seller_city TEXT")
         conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS seller_state TEXT")
+        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS source TEXT")
+        # Backfill source for existing rows
+        conn.execute("""
+            UPDATE auctions SET source = 'copart'
+            WHERE source IS NULL
+              AND (auction_id ~ '^[0-9]+$' OR auction_id LIKE 'copart_%')
+        """)
+        conn.execute("UPDATE auctions SET source = 'autura' WHERE source IS NULL")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")

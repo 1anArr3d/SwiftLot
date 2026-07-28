@@ -2,6 +2,7 @@
 Inspection scraper — Playwright once to solve Turnstile, pure HTTP for all VINs.
 Session is acquired once per batch and reused across all lookups.
 """
+import os
 import re
 from html.parser import HTMLParser
 
@@ -73,9 +74,24 @@ def _extract_hidden(html: str) -> dict:
 
 def _acquire_session() -> cffi_requests.Session:
     """Launch browser, solve Turnstile once, return HTTP session with cookie."""
+    import asyncio
+    if os.name == "nt":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        asyncio.set_event_loop(asyncio.new_event_loop())
     print("[inspection] Launching browser to solve Turnstile...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        headless = os.getenv("INSPECTION_HEADLESS", "false").lower() == "true"
+        try:
+            browser = p.chromium.launch(
+                headless=headless,
+                channel="chrome",
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+        except Exception:
+            browser = p.chromium.launch(
+                headless=headless,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
         page = browser.new_page()
         page.goto("https://www.mytxcar.org/TXCar_Net/VehicleTestDetail.aspx", timeout=60000)
 
