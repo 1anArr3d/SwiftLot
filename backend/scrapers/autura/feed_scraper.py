@@ -8,8 +8,7 @@ and auction_discovery.py.
 import json
 from datetime import datetime, timezone
 from db import get_db, query
-from .autura_api import get_all_feed, get_all_sellers
-from config import INSPECTION_STATES
+from .autura_api import get_all_feed, get_all_sellers, get_seller_listings
 
 
 # ── Parsing helpers ───────────────────────────────────────────────────────────
@@ -105,6 +104,7 @@ def _listing_to_auction_record(listing: dict) -> dict | None:
         "last_discovered":datetime.now(timezone.utc).isoformat(),
         "seller_city":    seller.get("city") or disc.get("city"),
         "seller_state":   seller.get("state") or disc.get("state"),
+        "source":         "autura",
     }
 
 
@@ -154,18 +154,19 @@ def _upsert_auction(conn, record: dict):
         """
         INSERT INTO auctions
             (auction_id, region_id, seller_name, auction_status, closes_at,
-             last_discovered, seller_city, seller_state)
+             last_discovered, seller_city, seller_state, source)
         VALUES
             (%(auction_id)s, %(region_id)s, %(seller_name)s,
              %(auction_status)s, %(closes_at)s, %(last_discovered)s,
-             %(seller_city)s, %(seller_state)s)
+             %(seller_city)s, %(seller_state)s, %(source)s)
         ON CONFLICT (auction_id) DO UPDATE SET
             auction_status  = EXCLUDED.auction_status,
             closes_at       = EXCLUDED.closes_at,
             last_discovered = EXCLUDED.last_discovered,
             seller_name     = COALESCE(EXCLUDED.seller_name, auctions.seller_name),
             seller_city     = COALESCE(EXCLUDED.seller_city, auctions.seller_city),
-            seller_state    = COALESCE(EXCLUDED.seller_state, auctions.seller_state)
+            seller_state    = COALESCE(EXCLUDED.seller_state, auctions.seller_state),
+            source          = COALESCE(EXCLUDED.source, auctions.source)
         """,
         record,
     )
@@ -232,20 +233,24 @@ def run_full_feed() -> dict:
     seen_auctions: set[str] = set()
     active_ids:    set[str] = set()
 
-    with get_db() as conn:
-        for listing in active:
-            _upsert_vehicle(conn, listing)
-            record = _listing_to_auction_record(listing)
-            if record:
-                aid = record["auction_id"]
-                active_ids.add(aid)
-                if aid not in seen_auctions:
-                    seen_auctions.add(aid)
-                    _upsert_auction(conn, record)
+    CHUNK = 100
+    for i in range(0, len(active), CHUNK):
+        chunk = active[i:i + CHUNK]
+        with get_db() as conn:
+            for listing in chunk:
+                _upsert_vehicle(conn, listing)
+                record = _listing_to_auction_record(listing)
+                if record:
+                    aid = record["auction_id"]
+                    active_ids.add(aid)
+                    if aid not in seen_auctions:
+                        seen_auctions.add(aid)
+                        _upsert_auction(conn, record)
+        print(f"[feed] {min(i + CHUNK, len(active))}/{len(active)} vehicles written")
 
+    with get_db() as conn:
         for listing in sold:
             _insert_sold(conn, listing)
-
         conn.execute("""
             UPDATE auctions a
             SET vehicles_listed = (
@@ -254,8 +259,6 @@ def run_full_feed() -> dict:
         """)
 
     _handle_ended_auctions(active_ids, sold)
-    _backfill_seller_names()
-    _run_inspections()
 
     print(f"[feed] Done: {len(active)} vehicles, {len(seen_auctions)} auctions, {len(sold)} sold")
     return {"vehicles": len(active), "auctions": len(seen_auctions), "sold": len(sold)}
@@ -265,13 +268,68 @@ def run_full_feed() -> dict:
 scrape_all = run_full_feed
 
 
+def run_sold_backfill() -> dict:
+    """
+    Walk every seller and collect their sold listings into historical_sales.
+    Sold listings are only visible via ?seller= filter, not the global feed.
+    Runs independently of the main feed scrape; safe to call weekly.
+    """
+    sellers = get_all_sellers()
+    print(f"[sold-backfill] {len(sellers)} sellers to check")
+    inserted = skipped = errors = 0
+
+    for s in sellers:
+        try:
+            _, sold = get_seller_listings(s["accountId"])
+            if not sold:
+                continue
+            with get_db() as conn:
+                for listing in sold:
+                    details = listing.get("unitDetails") or {}
+                    bidding = listing.get("biddingInfo") or {}
+                    info    = bidding.get("auctionInfo") or {}
+                    winning = bidding.get("winningBid") or {}
+                    vin        = details.get("vin")
+                    auction_id = info.get("auctionId")
+                    sale_cents = winning.get("amountCents")
+                    if not vin or not auction_id or sale_cents is None:
+                        skipped += 1
+                        continue
+                    year_raw = details.get("year")
+                    try:
+                        year = int(year_raw) if year_raw else None
+                    except (ValueError, TypeError):
+                        year = None
+                    conn.execute(
+                        """
+                        INSERT INTO historical_sales
+                            (vin, year, make, model, color, key_status,
+                             region_id, auction_id, final_sale, fees_total, sold_at, source)
+                        VALUES
+                            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (vin, auction_id) DO NOTHING
+                        """,
+                        (vin, year, details.get("make"), details.get("model"),
+                         details.get("color"), details.get("keys"),
+                         s["accountId"], auction_id, sale_cents / 100, None,
+                         listing.get("updatedAt"), "autura_mp"),
+                    )
+                    inserted += 1
+        except Exception:
+            errors += 1
+            print(f"[sold-backfill] Error on seller {s['accountName']}")
+
+    print(f"[sold-backfill] Done: {inserted} inserted, {skipped} skipped, {errors} errors")
+    return {"inserted": inserted, "skipped": skipped, "errors": errors}
+
+
 # ── Support functions ─────────────────────────────────────────────────────────
 
 def _handle_ended_auctions(active_ids: set[str], sold_listings: list[dict]):
     from scrapers.autura import auction_listener as listener
 
     open_rows = query(
-        "SELECT auction_id FROM auctions WHERE auction_status NOT IN ('completed', 'ENDED')"
+        "SELECT auction_id FROM auctions WHERE auction_status NOT IN ('completed', 'ENDED') AND source = 'autura'"
     )
     ended = [r["auction_id"] for r in open_rows if r["auction_id"] not in active_ids]
     if not ended:
@@ -298,41 +356,3 @@ def _handle_ended_auctions(active_ids: set[str], sold_listings: list[dict]):
     print(f"[feed] Closed {len(ended)} ended auction(s): {ended}")
 
 
-def _backfill_seller_names():
-    """One registry request to fill any missing seller names."""
-    try:
-        sellers = get_all_sellers()
-    except Exception as e:
-        print(f"[feed] seller name sync skipped: {e}")
-        return
-    name_map = {s["accountId"]: s["accountName"] for s in sellers}
-    rows = query("SELECT auction_id, region_id FROM auctions WHERE seller_name IS NULL")
-    with get_db() as conn:
-        for row in rows:
-            name = name_map.get(row["region_id"])
-            if name:
-                conn.execute(
-                    "UPDATE auctions SET seller_name = %s WHERE auction_id = %s",
-                    (name, row["auction_id"]),
-                )
-
-
-def _run_inspections():
-    if not INSPECTION_STATES:
-        return
-    placeholders = ",".join(["%s"] * len(INSPECTION_STATES))
-    rows = query(
-        f"""
-        SELECT v.vin FROM vehicles v
-        JOIN auctions a ON v.auction_id = a.auction_id
-        WHERE a.seller_state IN ({placeholders})
-          AND v.last_recorded_odo IS NULL
-        """,
-        tuple(INSPECTION_STATES),
-    )
-    vins = [r["vin"] for r in rows]
-    if not vins:
-        return
-    print(f"[inspection] {len(vins)} VIN(s) queued for inspection ({', '.join(INSPECTION_STATES)})")
-    from .inspection_scraper import run_inspection_batch
-    run_inspection_batch(vins)

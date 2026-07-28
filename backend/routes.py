@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from db import query, get_db
@@ -19,29 +19,56 @@ def get_health():
 
 # ── Auctions ──────────────────────────────────────────────────────────────────
 
-@router.get("/auctions", response_model=list[Auction], tags=["auctions"])
+@router.get("/auctions", tags=["auctions"])
 def get_auctions():
     rows = query("""
-        SELECT * FROM auctions
-        WHERE auction_status != 'completed'
-          AND (vehicles_listed IS NULL OR vehicles_listed > 0)
-        ORDER BY seller_name
+        SELECT
+            region_id                               AS id,
+            region_id,
+            'autura'                                AS source,
+            MAX(seller_name)                        AS name,
+            MAX(seller_city)                        AS city,
+            MAX(seller_state)                       AS state,
+            SUM(COALESCE(vehicles_listed, 0))       AS vehicles_count,
+            MIN(closes_at)                          AS closes_at
+        FROM auctions
+        WHERE source = 'autura'
+          AND auction_status != 'completed'
+        GROUP BY region_id
+        HAVING SUM(COALESCE(vehicles_listed, 0)) > 0
+            OR bool_or(vehicles_listed IS NULL)
+        ORDER BY closes_at NULLS LAST
     """)
     return [dict(row) for row in rows]
 
 
 @router.get("/auctions/{auction_id}", response_model=Auction, tags=["auctions"])
 def get_auction(auction_id: str):
-    row = query("SELECT * FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
+    row = query("""
+        SELECT region_id          AS auction_id,
+               region_id,
+               MAX(seller_name)   AS seller_name,
+               'PRE_BID'          AS auction_status,
+               MAX(closes_at)     AS closes_at,
+               MAX(last_discovered) AS last_discovered,
+               MAX(seller_city)   AS seller_city,
+               MAX(seller_state)  AS seller_state,
+               SUM(COALESCE(vehicles_listed, 0)) AS vehicles_listed
+        FROM auctions
+        WHERE region_id = %s AND source = 'autura'
+        GROUP BY region_id
+    """, (auction_id,), one=True)
     if not row:
         raise HTTPException(status_code=404, detail="Auction not found")
     return dict(row)
 
 
-
 @router.get("/auctions/{auction_id}/vehicles", response_model=list[Vehicle], tags=["auctions"])
-def get_auction_vehicles(auction_id: str):
-    rows = query("SELECT * FROM vehicles WHERE auction_id = %s", (auction_id,))
+def get_auction_vehicles(auction_id: str, limit: int = 1000, offset: int = 0):
+    rows = query(
+        "SELECT * FROM vehicles WHERE region_id = %s ORDER BY make, model, year LIMIT %s OFFSET %s",
+        (auction_id, limit, offset)
+    )
     return [dict(row) for row in rows]
 
 
@@ -97,20 +124,24 @@ def get_vehicle_history(vin: str):
 
 @router.get("/historical/stats", tags=["historical"])
 def get_historical_stats(make: str, model: str, year: int):
-    row = query(
-        """SELECT
-               COUNT(*)                   AS count,
-               ROUND(AVG(final_sale)::numeric, 0)  AS avg_sale,
-               MIN(final_sale)            AS min_sale,
-               MAX(final_sale)            AS max_sale
+    _sql = """SELECT
+               COUNT(*)                          AS count,
+               ROUND(AVG(final_sale)::numeric, 0) AS avg_sale,
+               MIN(final_sale)                   AS min_sale,
+               MAX(final_sale)                   AS max_sale
            FROM historical_sales
            WHERE UPPER(make) = UPPER(%s)
              AND UPPER(model) = UPPER(%s)
-             AND year = %s
-             AND final_sale IS NOT NULL""",
-        (make, model, year),
-        one=True,
-    )
+             AND {year_clause}
+             AND final_sale IS NOT NULL"""
+
+    row = query(_sql.format(year_clause="year = %s"), (make, model, year), one=True)
+    if row and row["count"] >= 3:
+        return {"make": make, "model": model, "year": year, "count": row["count"],
+                "avg_sale": row["avg_sale"], "min_sale": row["min_sale"], "max_sale": row["max_sale"]}
+
+    # Fall back to ±2 year window
+    row = query(_sql.format(year_clause="year BETWEEN %s AND %s"), (make, model, year - 2, year + 2), one=True)
     if not row or row["count"] < 3:
         return {"make": make, "model": model, "year": year, "count": 0}
     return {
@@ -121,7 +152,39 @@ def get_historical_stats(make: str, model: str, year: int):
         "avg_sale": row["avg_sale"],
         "min_sale": row["min_sale"],
         "max_sale": row["max_sale"],
+        "approx": True,
     }
+
+
+@router.post("/historical/stats/batch", tags=["historical"])
+def get_historical_stats_batch(combos: list[dict]):
+    _sql = """SELECT
+               COUNT(*)                           AS count,
+               ROUND(AVG(final_sale)::numeric, 0) AS avg_sale,
+               MIN(final_sale)                    AS min_sale,
+               MAX(final_sale)                    AS max_sale
+           FROM historical_sales
+           WHERE UPPER(make) = UPPER(%s)
+             AND UPPER(model) = UPPER(%s)
+             AND {year_clause}
+             AND final_sale IS NOT NULL"""
+
+    results = {}
+    for c in combos:
+        make, model, year = c.get("make"), c.get("model"), c.get("year")
+        if not make or not model or not year:
+            continue
+        key = f"{make}|{model}|{year}"
+        row = query(_sql.format(year_clause="year = %s"), (make, model, year), one=True)
+        if row and row["count"] >= 3:
+            results[key] = {"count": row["count"], "avg_sale": row["avg_sale"],
+                            "min_sale": row["min_sale"], "max_sale": row["max_sale"]}
+            continue
+        row = query(_sql.format(year_clause="year BETWEEN %s AND %s"), (make, model, year - 2, year + 2), one=True)
+        if row and row["count"] >= 3:
+            results[key] = {"count": row["count"], "avg_sale": row["avg_sale"],
+                            "min_sale": row["min_sale"], "max_sale": row["max_sale"], "approx": True}
+    return results
 
 
 @router.get("/historical/search", tags=["historical"])
@@ -238,43 +301,56 @@ def remove_from_garage(vin: str, user_id: str = Depends(get_current_user)):
 @router.get("/saved-auctions", response_model=list[SavedAuction], tags=["saved-auctions"])
 def get_saved_auctions(user_id: str = Depends(get_current_user)):
     rows = query("""
-        SELECT a.auction_id, a.region_id, a.seller_name, a.auction_status,
-               a.vehicles_listed, a.closes_at, s.saved_at
+        SELECT s.auction_id AS region_id,
+               MAX(a.seller_name) AS seller_name,
+               MAX(a.seller_city) AS seller_city,
+               MAX(a.seller_state) AS seller_state,
+               'PRE_BID' AS auction_status,
+               SUM(COALESCE(a.vehicles_listed, 0)) AS vehicles_listed,
+               MIN(a.closes_at) AS closes_at,
+               s.saved_at
         FROM saved_auctions s
-        JOIN auctions a ON s.auction_id = a.auction_id
+        JOIN auctions a ON s.auction_id = a.region_id
         WHERE s.user_id = %s
+        GROUP BY s.auction_id, s.saved_at
         ORDER BY s.saved_at DESC
     """, (user_id,))
     return [dict(row) for row in rows]
 
 
-@router.post("/saved-auctions/{auction_id}", tags=["saved-auctions"])
-def save_auction(auction_id: str, user_id: str = Depends(get_current_user)):
-    auction = query("SELECT auction_id FROM auctions WHERE auction_id = %s", (auction_id,), one=True)
+@router.get("/saved-auctions/check/{region_id}", tags=["saved-auctions"])
+def check_saved_auction(region_id: str, user_id: str = Depends(get_current_user)):
+    row = query("SELECT 1 FROM saved_auctions WHERE auction_id = %s AND user_id = %s", (region_id, user_id), one=True)
+    return {"saved": row is not None}
+
+
+@router.post("/saved-auctions/{region_id}", tags=["saved-auctions"])
+def save_auction(region_id: str, user_id: str = Depends(get_current_user)):
+    auction = query("SELECT 1 FROM auctions WHERE region_id = %s LIMIT 1", (region_id,), one=True)
     if not auction:
         raise HTTPException(status_code=404, detail="Auction not found")
     with get_db() as conn:
         conn.execute(
             "INSERT INTO saved_auctions (auction_id, user_id, saved_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
-            (auction_id, user_id)
+            (region_id, user_id)
         )
-    return {"status": "saved", "auction_id": auction_id}
+    return {"status": "saved", "region_id": region_id}
 
 
-@router.delete("/saved-auctions/{auction_id}", tags=["saved-auctions"])
-def unsave_auction(auction_id: str, user_id: str = Depends(get_current_user)):
+@router.delete("/saved-auctions/{region_id}", tags=["saved-auctions"])
+def unsave_auction(region_id: str, user_id: str = Depends(get_current_user)):
     with get_db() as conn:
         conn.execute(
             "DELETE FROM saved_auctions WHERE auction_id = %s AND user_id = %s",
-            (auction_id, user_id)
+            (region_id, user_id)
         )
-    return {"status": "removed", "auction_id": auction_id}
+    return {"status": "removed", "region_id": region_id}
 
 
 # ── SSE Stream ────────────────────────────────────────────────────────────────
 
 @router.get("/stream/multi", tags=["stream"])
-async def stream_multi_auctions(auctions: str = ""):
+async def stream_multi_auctions(request: Request, auctions: str = ""):
     """
     SSE stream for live updates across multiple auctions.
     Query param: auctions=id1,id2,id3

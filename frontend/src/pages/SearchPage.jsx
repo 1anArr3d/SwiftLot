@@ -2,16 +2,21 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
-import { REGION_LABEL } from '../constants';
 import FilterSection from '../components/FilterSection';
 import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
+
+const parseImages = (raw) => { try { return JSON.parse(raw); } catch { return []; } };
+const fmtAvgSale = (s, fmt$) => {
+  if (!s) return '—';
+  return `${s.approx ? '~' : ''}${fmt$(s.avg_sale)} avg · ${s.count} sale${s.count !== 1 ? 's' : ''} (${fmt$(s.min_sale)}–${fmt$(s.max_sale)})`;
+};
 
 const SearchPage = () => {
   const navigate = useNavigate();
   const { token } = useAuth();
   const [vehicles, setVehicles] = useState([]);
-  const [liveBids, setLiveBids] = useState({});
+  const [loading, setLoading] = useState(true);
   const [watchlistVins, setWatchlistVins] = useState(new Set());
   const [histStats, setHistStats] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
@@ -19,7 +24,7 @@ const SearchPage = () => {
   const [yearRange, setYearRange] = useState([null, null]);
   const [odoRange, setOdoRange] = useState([null, null]);
   const [filters, setFilters] = useState({
-    make: new Set(), model: new Set(), region_id: new Set(),
+    make: new Set(), model: new Set(),
     start_status: new Set(), engine_type: new Set(), drivetrain: new Set(),
   });
 
@@ -27,7 +32,8 @@ const SearchPage = () => {
     fetch(`${API}/vehicles`)
       .then(r => r.json())
       .then(setVehicles)
-      .catch(console.error);
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -38,31 +44,6 @@ const SearchPage = () => {
       .catch(console.error);
   }, [token]);
 
-  const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');
-  useEffect(() => {
-    if (!auctionIdKey) return;
-    setLiveBids({});
-    let stopped = false;
-    let source;
-
-    const connect = () => {
-      if (stopped) return;
-      source = new EventSource(`${API}/stream/multi?auctions=${auctionIdKey}`);
-      source.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'bid') {
-          setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
-        }
-      };
-      source.onerror = () => {
-        source.close();
-        if (!stopped) setTimeout(connect, 3000);
-      };
-    };
-
-    connect();
-    return () => { stopped = true; source?.close(); };
-  }, [auctionIdKey]);
 
   const statsKey = (v) => `${v.make}|${v.model}|${v.year}`;
 
@@ -76,17 +57,16 @@ const SearchPage = () => {
       const k = statsKey(v);
       if (seen.has(k)) return false;
       seen.add(k); return true;
-    });
-    Promise.all(combos.map(v =>
-      fetch(`${API}/historical/stats?make=${encodeURIComponent(v.make)}&model=${encodeURIComponent(v.model)}&year=${v.year}`)
-        .then(r => r.json())
-        .then(data => [statsKey(v), data])
-        .catch(() => null)
-    )).then(results => {
-      const map = {};
-      results.forEach(r => { if (r && r[1].count > 0) map[r[0]] = r[1]; });
-      setHistStats(map);
-    });
+    }).map(v => ({ make: v.make, model: v.model, year: v.year }));
+    if (!combos.length) return;
+    fetch(`${API}/historical/stats/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(combos),
+    })
+      .then(r => r.json())
+      .then(data => setHistStats(Object.fromEntries(Object.entries(data).filter(([, v]) => v.count > 0))))
+      .catch(console.error);
   }, [vehicles.length]);
 
   const parseOdo = (odoStr) => {
@@ -111,7 +91,7 @@ const SearchPage = () => {
   const [filtersOpen, setFiltersOpen] = useState(() => !window.matchMedia('(max-width: 768px)').matches);
   const hasActiveFilters = Object.values(filters).some(s => s.size > 0) || yearRange[0] !== null || yearRange[1] !== null || odoRange[0] !== null || odoRange[1] !== null;
   const clearAll = () => {
-    setFilters({ make: new Set(), model: new Set(), region_id: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
+    setFilters({ make: new Set(), model: new Set(), start_status: new Set(), engine_type: new Set(), drivetrain: new Set() });
     setYearRange([null, null]);
     setOdoRange([null, null]);
   };
@@ -156,9 +136,10 @@ const SearchPage = () => {
     }
   };
 
-  const COLS = 17;
+  const COLS = 16;
   const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
-  const getBid = (car) => liveBids[car.item_key]?.amount ?? car.current_bid;
+
+  if (loading) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>Loading vehicles…</div>;
 
   return (
     <div className="app-wrapper">
@@ -180,6 +161,12 @@ const SearchPage = () => {
             <input type="range" min={minYear} max={maxYear} value={yearMax}
               onChange={e => setYearRange([yearRange[0], parseInt(e.target.value)])} className="slider" />
           </FilterSection>
+          <FilterSection title="Make">
+            <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
+          </FilterSection>
+          <FilterSection title="Model">
+            <ChecklistFilter options={uniqueOpts('model')} selected={filters.model} onChange={v => setFilter('model', v)} />
+          </FilterSection>
           <FilterSection title="Odometer">
             <div className="year-range-labels">
               <span>{odoMin.toLocaleString()} mi</span><span>{odoMax.toLocaleString()} mi</span>
@@ -189,12 +176,6 @@ const SearchPage = () => {
             <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMax}
               onChange={e => setOdoRange([odoRange[0], parseInt(e.target.value)])} className="slider" />
           </FilterSection>
-          <FilterSection title="Make">
-            <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
-          </FilterSection>
-          <FilterSection title="Model">
-            <ChecklistFilter options={uniqueOpts('model')} selected={filters.model} onChange={v => setFilter('model', v)} />
-          </FilterSection>
           <FilterSection title="Status">
             <ChecklistFilter options={uniqueOpts('start_status')} selected={filters.start_status} onChange={v => setFilter('start_status', v)} />
           </FilterSection>
@@ -203,14 +184,6 @@ const SearchPage = () => {
           </FilterSection>
           <FilterSection title="Drivetrain">
             <ChecklistFilter options={uniqueOpts('drivetrain')} selected={filters.drivetrain} onChange={v => setFilter('drivetrain', v)} />
-          </FilterSection>
-          <FilterSection title="Region">
-            <ChecklistFilter
-              options={uniqueOpts('region_id')}
-              selected={filters.region_id}
-              onChange={v => setFilter('region_id', v)}
-              labelMap={REGION_LABEL}
-            />
           </FilterSection>
         </>}
       </aside>
@@ -229,14 +202,14 @@ const SearchPage = () => {
           <table className="vehicle-table search-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Region', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.map((car, idx) => {
-                const images = car.images ? (() => { try { return JSON.parse(car.images); } catch { return []; } })() : [];
+                const images = car.images ? parseImages(car.images) : [];
                 const isExpanded = expandedVins.has(car.vin);
                 const liked = watchlistVins.has(car.vin);
                 return [
@@ -252,7 +225,6 @@ const SearchPage = () => {
                     <td>{car.year}</td>
                     <td>{car.make}</td>
                     <td>{car.model}</td>
-                    <td>{REGION_LABEL[car.region_id] ?? car.region_id}</td>
                     <td>{car.color}</td>
                     <td>{car.key_status}</td>
                     <td className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</td>
@@ -260,7 +232,7 @@ const SearchPage = () => {
                     <td>{car.engine_type}</td>
                     <td>{car.drivetrain}</td>
                     <td>{car.fuel_type || '—'}</td>
-                    <td className={getBid(car) ? 'bid-active' : ''}>{fmt$(getBid(car))}</td>
+                    <td className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</td>
                     <td>{fmt$(car.reserve_price)}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}</td>
@@ -285,27 +257,26 @@ const SearchPage = () => {
                             <div className="expanded-actions">
                               <button
                                 className="btn"
-                                onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.auction_id}`, { state: { vin: car.vin } }); }}
+                                onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.region_id}`, { state: { vin: car.vin } }); }}
                               >
                                 View in Auction
                               </button>
-                              <a
-                                className="btn"
-                                href={car.item_id
-                                  ? `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}/vehicle/${car.item_id}`
-                                  : `https://app.marketplace.autura.com/auction/${car.region_id}/${car.auction_id}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={e => e.stopPropagation()}
-                              >
-                                View Listing
-                              </a>
+                              {car.item_key && (
+                                <a
+                                  className="btn"
+                                  href={`https://mp.autura.com/auctions/listings/${car.item_key}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  View Listing
+                                </a>
+                              )}
                             </div>
                             <div className="detail-grid">
                               <div className="detail-item"><span className="detail-label">Year</span><span>{car.year}</span></div>
                               <div className="detail-item"><span className="detail-label">Make</span><span>{car.make}</span></div>
                               <div className="detail-item"><span className="detail-label">Model</span><span>{car.model}</span></div>
-                              <div className="detail-item"><span className="detail-label">Region</span><span>{REGION_LABEL[car.region_id] ?? car.region_id}</span></div>
                               <div className="detail-item"><span className="detail-label">Color</span><span>{car.color}</span></div>
                               <div className="detail-item"><span className="detail-label">Keys</span><span>{car.key_status}</span></div>
                               <div className="detail-item"><span className="detail-label">Cat. Converter</span><span className={car.catalytic_converter === 'Present' ? 'cat-present' : 'cat-missing'}>{car.catalytic_converter}</span></div>
@@ -315,8 +286,8 @@ const SearchPage = () => {
                               <div className="detail-item"><span className="detail-label">Body</span><span>{car.body_type || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Cylinders</span><span>{car.num_cylinders || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Doc Type</span><span>{car.documentation_type || '—'}</span></div>
-                              <div className="detail-item"><span className="detail-label">Current Bid</span><span className={getBid(car) ? 'bid-active' : ''}>{fmt$(getBid(car))}</span></div>
-                              <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</span></div>
+                              <div className="detail-item"><span className="detail-label">Current Bid</span><span className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</span></div>
+                              <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{fmtAvgSale(histStats[statsKey(car)], fmt$)}</span></div>
                               <div className="detail-item"><span className="detail-label">Reserve</span><span>{fmt$(car.reserve_price)}</span></div>
                               <div className="detail-item"><span className="detail-label">Buyer Fee</span><span>{fmt$(car.fee_price)}</span></div>
                               {car.bid_expiration && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(car.bid_expiration).toLocaleString()}</span></div>}

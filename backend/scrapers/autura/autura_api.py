@@ -4,48 +4,79 @@ Autura Marketplace API client — mp.autura.com.
 Fetches HTML pages from the inventory feed, extracts the embedded
 React Router turbo-stream payload, and decodes it into plain dicts.
 
-See docs/autura_mp_api.md for full structure reference.
+Session is acquired once via POST /signin and reused; re-auth on redirect
+back to /signin (session expiry).
 """
 import json
 import math
+import os
+import threading
+
 from curl_cffi import requests as cffi_requests
 
 BASE_URL = "https://mp.autura.com"
 
-
-def _auth_cookies() -> dict:
-    from config import AUTURA_COOKIES
-    return AUTURA_COOKIES
+_session: cffi_requests.Session | None = None
+_session_lock = threading.Lock()
 
 
-def _fetch_html(url: str) -> str:
-    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30, cookies=_auth_cookies())
-    resp.raise_for_status()
-    return resp.text
+# ── Session ───────────────────────────────────────────────────────────────────
+
+def _acquire_session() -> cffi_requests.Session:
+    email = os.getenv("AUTURA_EMAIL", "")
+    password = os.getenv("AUTURA_PASSWORD", "")
+
+    sess = cffi_requests.Session(impersonate="chrome120")
+    sess.headers.update({
+        "accept-language": "en-US,en;q=0.9",
+        "origin": BASE_URL,
+        "referer": f"{BASE_URL}/signin",
+    })
+
+    if email and password:
+        print("[autura] Logging in...")
+        sess.get(f"{BASE_URL}/signin", timeout=20)
+        sess.post(
+            f"{BASE_URL}/signin",
+            data={"email": email, "password": password},
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            timeout=20,
+        )
+        if sess.cookies.get("user-session"):
+            print("[autura] Logged in")
+        else:
+            print("[autura] Login failed — no user-session cookie received")
+    else:
+        print("[autura] No credentials — guest session only")
+
+    return sess
 
 
-def _fetch_flat(url: str) -> list:
-    """Fetch a .data endpoint that returns a turbo-stream JSON array directly."""
-    resp = cffi_requests.get(url, impersonate="chrome120", timeout=30, cookies=_auth_cookies())
-    resp.raise_for_status()
-    return json.loads(resp.text)
+def _get_session() -> cffi_requests.Session:
+    global _session
+    with _session_lock:
+        if _session is None:
+            _session = _acquire_session()
+        return _session
 
 
-def get_all_sellers() -> list[dict]:
-    """
-    Fetch the full seller registry from /sellers.data.
-    Returns list of dicts with accountId and accountName.
-    """
-    flat = _fetch_flat(f"{BASE_URL}/sellers.data?_routes=routes%2Fsellers")
-    root = _decode(flat, flat[0])
-    data = (root.get("routes/sellers") or {}).get("data") or {}
-    sellers_raw = data.get("sellers") or []
-    return [
-        {"accountId": s["accountId"], "accountName": s["accountName"]}
-        for s in sellers_raw
-        if s and s.get("accountId") and s.get("accountName")
-    ]
+def reset_session():
+    global _session
+    with _session_lock:
+        _session = None
 
+
+def _authed_get(url: str, **kwargs) -> cffi_requests.Response:
+    sess = _get_session()
+    resp = sess.get(url, **kwargs)
+    if resp.url and "/signin" in str(resp.url) and resp.url != url:
+        reset_session()
+        sess = _get_session()
+        resp = sess.get(url, **kwargs)
+    return resp
+
+
+# ── Turbo-stream decoder ───────────────────────────────────────────────────────
 
 def _decode(flat: list, val) -> any:
     """Recursively decode one turbo-stream value from the flat array."""
@@ -71,29 +102,44 @@ def _decode(flat: list, val) -> any:
     return val
 
 
-def _parse_auctions_page(html: str) -> dict:
-    """Extract and decode the auctions page loader data from page HTML."""
-    idx = html.find("streamController.enqueue(")
-    if idx == -1:
-        raise ValueError("turbo-stream enqueue not found in page HTML")
-    rest = html[idx + len("streamController.enqueue("):]
-    raw_json_str, _ = json.JSONDecoder().raw_decode(rest.strip())
-    flat = json.loads(raw_json_str)
+def _fetch_flat(url: str) -> list:
+    """Fetch a .data endpoint that returns a turbo-stream JSON array directly."""
+    resp = _authed_get(url, timeout=30, allow_redirects=True)
+    resp.raise_for_status()
+    return json.loads(resp.text)
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+def get_all_sellers() -> list[dict]:
+    """
+    Fetch the full seller registry from /sellers.data.
+    Returns list of dicts with accountId and accountName.
+    """
+    flat = _fetch_flat(f"{BASE_URL}/sellers.data?_routes=routes%2Fsellers")
     root = _decode(flat, flat[0])
-    loader = root.get("loaderData") or {}
-    return loader.get("pages/auctions/Auctions") or {}
+    data = (root.get("routes/sellers") or {}).get("data") or {}
+    sellers_raw = data.get("sellers") or []
+    return [
+        {"accountId": s["accountId"], "accountName": s["accountName"]}
+        for s in sellers_raw
+        if s and s.get("accountId") and s.get("accountName")
+    ]
 
 
 def get_listings_page(page: int = 1, seller: str = None) -> dict:
     """
-    Fetch one page of active inventory from mp.autura.com/auctions.
+    Fetch one page of active inventory from mp.autura.com/auctions.data.
     Returns decoded dict with keys: unitListings, soldUnitListings, total, page, perPage.
     Pass seller=accountId to filter to a single seller.
     """
-    url = f"{BASE_URL}/auctions?page={page}"
+    url = f"{BASE_URL}/auctions.data?page={page}"
     if seller:
         url += f"&seller={seller}"
-    return _parse_auctions_page(_fetch_html(url))
+    flat = _fetch_flat(url)
+    root = _decode(flat, flat[0])
+    page_data = root.get("pages/auctions/Auctions") or {}
+    return page_data.get("data") or {}
 
 
 def get_all_listings() -> list[dict]:
@@ -122,55 +168,42 @@ def get_all_feed() -> tuple[list[dict], list[dict]]:
     return active, sold
 
 
-def get_listing_detail(item_key: str) -> dict:
-    """
-    Fetch a single listing's current bid by scraping its detail page HTML.
-    Returns {"current_bid": float|None, "bid_expiration": str|None, "status": str|None}.
-    Called on every Ably ping for each vehicle in the pinged auction.
-    """
-    html = _fetch_html(f"{BASE_URL}/auctions/listings/{item_key}")
-    idx = html.find("streamController.enqueue(")
-    if idx == -1:
-        return {"current_bid": None, "bid_expiration": None, "status": None}
-    rest = html[idx + len("streamController.enqueue("):]
-    raw_json_str, _ = json.JSONDecoder().raw_decode(rest.strip())
-    flat = json.loads(raw_json_str)
-    root = _decode(flat, flat[0])
-    loader = root.get("loaderData") or {}
-    for v in loader.values():
-        if not isinstance(v, dict):
-            continue
-        ul      = v.get("unitListing") or {}
-        bidding = ul.get("biddingInfo") or {}
-        if not bidding:
-            continue
-        winning = bidding.get("winningBid") or {}
-        info    = bidding.get("auctionInfo") or {}
-        cents   = winning.get("amountCents")
-        return {
-            "current_bid":    cents / 100 if cents is not None else None,
-            "bid_expiration": info.get("biddingEndUtc"),
-            "status":         bidding.get("biddingStatus"),
-        }
-    return {"current_bid": None, "bid_expiration": None, "status": None}
-
 
 def get_seller_listings(account_id: str) -> tuple[list[dict], list[dict]]:
     """
     Fetch active + sold listings for a single seller via ?seller= filter.
-    Much faster than fetching all pages when we only need one seller.
+    Paginates until both lists stop growing (total=0 for sold-only sellers).
     Returns (active_listings, sold_listings).
     """
     first = get_listings_page(1, seller=account_id)
-    total = first.get("total") or 0
     per_page = first.get("perPage") or 12
     active = list(first.get("unitListings") or [])
     sold = list(first.get("soldUnitListings") or [])
 
-    total_pages = math.ceil(total / per_page) if per_page else 1
-    for p in range(2, total_pages + 1):
+    # Use total for active pages; fall back to response-size check for sold-only sellers
+    total = first.get("total") or 0
+    total_pages = max(1, math.ceil(total / per_page)) if per_page else 1
+
+    seen_vins: set[str] = set()
+    for lst in (active, sold):
+        for l in lst:
+            v = (l.get("unitDetails") or {}).get("vin")
+            if v:
+                seen_vins.add(v)
+
+    p = 2
+    while p <= max(total_pages, 1) + 1:
         page_data = get_listings_page(p, seller=account_id)
-        active.extend(page_data.get("unitListings") or [])
-        sold.extend(page_data.get("soldUnitListings") or [])
+        new_active = page_data.get("unitListings") or []
+        new_sold = page_data.get("soldUnitListings") or []
+        if not new_active and not new_sold:
+            break
+        new_vins = {(l.get("unitDetails") or {}).get("vin") for l in new_active + new_sold} - {None}
+        if new_vins and new_vins.issubset(seen_vins):
+            break  # API cycling — same items returned again
+        seen_vins.update(new_vins)
+        active.extend(new_active)
+        sold.extend(new_sold)
+        p += 1
 
     return active, sold

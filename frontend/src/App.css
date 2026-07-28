@@ -112,6 +112,34 @@ input, button { font-family: var(--font); }
 .region-hero-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-end; padding: var(--space-md) var(--space-lg); }
 .region-hero-title { margin: 0; font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.04em; text-shadow: 0 2px 8px rgba(0,0,0,0.6); }
 
+/* AUCTIONS PAGE LAYOUT */
+.auctions-soon-section  { margin-bottom: var(--space-lg); }
+.auctions-state-group   { margin-bottom: var(--space-lg); }
+.auctions-section-title { font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: var(--space-sm); padding-bottom: 6px; border-bottom: 1px solid var(--border-dim); }
+
+.auctions-carousel-outer {
+  overflow: hidden;
+  cursor: grab; user-select: none; -webkit-user-select: none;
+  touch-action: none;
+  padding: 8px 0 16px;
+}
+.auctions-carousel-track { height: 170px; }
+.auctions-carousel-track > div {
+  width: 220px; min-height: 160px;
+  background: var(--hero); border: 1px solid var(--border-dim);
+  border-radius: var(--radius-md); padding: var(--space-md);
+  cursor: pointer; display: flex; flex-direction: column; gap: var(--space-sm);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+}
+.auctions-carousel-track > div:hover { border-color: var(--steel-highlight); box-shadow: 0 4px 18px rgba(30,106,191,0.25); }
+.auctions-carousel-track > div.has-vehicles { border-color: var(--border-bright); }
+.auctions-carousel-track > div.source-autura { background: #1a3a26; }
+
+.auctions-pair-grid { display: flex; flex-wrap: wrap; gap: var(--space-md); }
+.auctions-pair-grid .auction-card { width: 220px; min-height: 160px; flex-shrink: 0; }
+
 /* AUCTION CARDS */
 .auction-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-md); }
 .auction-card { background: var(--hero); border: 1px solid var(--border-dim); border-radius: var(--radius-md); padding: var(--space-md); cursor: pointer; display: flex; flex-direction: column; gap: var(--space-sm); box-shadow: 0 2px 8px rgba(0,0,0,0.3); transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s; }
@@ -138,6 +166,8 @@ input, button { font-family: var(--font); }
 .badge-live   { font-size: 10px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--radius-lg); background: rgba(46,204,113,0.15); color: #2ecc71; border: 1px solid rgba(46,204,113,0.5); flex-shrink: 0; }
 .badge-paused { background: rgba(230,126,34,0.15); color: #e67e22; border-color: rgba(230,126,34,0.5); }
 .auction-card.is-live { border-color: rgba(46,204,113,0.5); }
+.auction-card.source-autura { background: #1a3a26; }
+.auction-card.source-autura:hover { border-color: #3abf72; box-shadow: 0 4px 18px rgba(58,191,114,0.25); }
 .auction-ended-banner { background: rgba(74,106,138,0.2); border: 1px solid var(--border-dim); border-radius: var(--radius-md); padding: 10px 16px; margin-bottom: 10px; font-size: 13px; font-weight: 600; color: var(--text-primary); text-align: center; }
 
 /* SIDEBAR & FILTERS */
@@ -420,6 +450,9 @@ input, button { font-family: var(--font); }
 
   /* Auction grid: single column on small screens */
   .auction-grid { grid-template-columns: 1fr; }
+  .auctions-pair-grid .auction-card,
+  .auctions-carousel-track > div { width: 180px; min-height: 140px; }
+  .auctions-carousel-track { height: 150px; }
 
   /* Expanded panel stacks image above details */
   .expanded-panel { flex-direction: column; }
@@ -466,16 +499,15 @@ input, button { font-family: var(--font); }
   .search-table th:nth-child(7),  .search-table td:nth-child(7),
   .search-table th:nth-child(8),  .search-table td:nth-child(8),
   .search-table th:nth-child(9),  .search-table td:nth-child(9),
-  .search-table th:nth-child(10), .search-table td:nth-child(10),
-  .search-table th:nth-child(11), .search-table td:nth-child(11) { display: none; }
+  .search-table th:nth-child(10), .search-table td:nth-child(10) { display: none; }
 
   /* AuctionDetail: show Year(1),Make(2),Model(3),Bid(11),Reserve(12),AvgSale(15),Save(16) — hide VIN,Odo */
   .auction-detail-table th:nth-child(13), .auction-detail-table td:nth-child(13),
   .auction-detail-table th:nth-child(14), .auction-detail-table td:nth-child(14) { display: none; }
 
-  /* Search: show Year(1),Make(2),Model(3),Bid(12),Reserve(13),AvgSale(16),Save(17) — hide VIN,Odo */
-  .search-table th:nth-child(14), .search-table td:nth-child(14),
-  .search-table th:nth-child(15), .search-table td:nth-child(15) { display: none; }
+  /* Search: show Year(1),Make(2),Model(3),Bid(11),Reserve(12),AvgSale(15),Save(16) — hide VIN,Odo */
+  .search-table th:nth-child(13), .search-table td:nth-child(13),
+  .search-table th:nth-child(14), .search-table td:nth-child(14) { display: none; }
 
   /* WatchlistPage: Year(1), Make(2), Model(3), Bid(11), Avg Sale(14), Remove(15) */
   .watchlist-table th:nth-child(4),  .watchlist-table td:nth-child(4),

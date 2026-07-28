@@ -1,198 +1,259 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { API, authFetch } from '../api';
-import { useAuth } from '../AuthContext';
-import { REGION_LABEL, REGION_PHOTOS } from '../constants';
+import { API } from '../api';
 
-const cityPhotos = import.meta.glob('../assets/cityphotos/Photos/*.jpg', { eager: true });
+const CARD_GAP  = 16;
+const NUM_CARDS = 16;
+const SPEED     = 0.5;
 
-const isCSTNight = () => {
-  const hour = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' })).getHours();
-  return hour >= 18 || hour < 6;
-};
+const sanitize = (card) => ({
+  id:             card.id,
+  source:         card.source,
+  name:           card.name || card.id,
+  city:           card.city || null,
+  state:          card.state || null,
+  vehicles_count: Number(card.vehicles_count) || 0,
+  closes_at:      card.closes_at || null,
+});
 
-const getRegionPhoto = (regionId) => {
-  const entry = REGION_PHOTOS[regionId];
-  if (!entry) return null;
-  const filename = isCSTNight() ? entry.night : entry.day;
-  return cityPhotos[`../assets/cityphotos/Photos/${filename}`]?.default ?? null;
-};
+function formatDate(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function groupByState(cards) {
+  const map = {};
+  for (const card of cards) {
+    const key = card.state || 'Other';
+    if (!map[key]) map[key] = [];
+    map[key].push(card);
+  }
+  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b));
+}
+
+function AuctionCard({ card, onClick }) {
+  const hasVehicles = card.vehicles_count > 0;
+  return (
+    <div
+      className={`auction-card source-${card.source}${hasVehicles ? ' has-vehicles' : ''}`}
+      onClick={onClick}
+    >
+      <div className="auction-card-top">
+        <div className="auction-card-seller">{card.name}</div>
+      </div>
+      <div className="auction-card-divider" />
+      <div className="auction-card-info">
+        {(card.city || card.state) && (
+          <div className="auction-card-info-row">
+            <span className="info-label">Location</span>
+            <span>{[card.city, card.state].filter(Boolean).join(', ')}</span>
+          </div>
+        )}
+        {card.closes_at && (
+          <div className="auction-card-info-row">
+            <span className="info-label">Ends</span>
+            <span>{formatDate(card.closes_at)}</span>
+          </div>
+        )}
+      </div>
+      <div className="auction-card-footer">
+        <span className="vehicles-count">
+          {hasVehicles ? `${card.vehicles_count} vehicles` : 'No vehicles listed'}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 const AuctionsPage = () => {
-  const [auctions, setAuctions] = useState([]);
-  const [openStates, setOpenStates] = useState(new Set());
-  const [savedIds, setSavedIds] = useState(new Set());
-  const sseRef = useRef(null);
-
+  const [auctionList, setAuctionList] = useState([]);
+  const [loading, setLoading]         = useState(true);
   const navigate = useNavigate();
-  const { token } = useAuth();
+
+  // — Carousel refs —
+  const pool   = useRef([]);
+  const poolIdx = useRef(0);
+  const slots  = useRef([]);
+  const cards  = useRef([]);
+  const scroll = useRef(0);
+  const vel    = useRef(SPEED);
+  const raf    = useRef(null);
+  const ready  = useRef(false);
+  const drag   = useRef({ on: false, startX: 0, startScroll: 0, delta: 0, target: null, lastX: 0, lastTime: 0 });
+  const stride = useRef(0);
+
+  function nextAuction() {
+    const p = pool.current;
+    if (!p.length) return null;
+    const v = p[poolIdx.current % p.length];
+    poolIdx.current++;
+    return v;
+  }
+
+  function paintCard(i, card) {
+    if (!card || !cards.current[i]) return;
+    cards.current[i].data = card;
+    const { el, seller, location, ends, count } = cards.current[i];
+    el.dataset.auctionId = card.id;
+    el.className = `auction-card source-${card.source}${card.vehicles_count > 0 ? ' has-vehicles' : ''}`;
+    seller.textContent = card.name;
+    location.textContent = [card.city, card.state].filter(Boolean).join(', ');
+    ends.textContent = card.closes_at ? `Ends ${formatDate(card.closes_at)}` : '';
+    count.textContent = card.vehicles_count > 0 ? `${card.vehicles_count} vehicles` : 'No vehicles listed';
+  }
+
+  function tryInit(newPool) {
+    if (ready.current) {
+      pool.current = newPool;
+      poolIdx.current = 0;
+      cards.current.forEach((_, i) => paintCard(i, nextAuction()));
+      return;
+    }
+    pool.current = newPool;
+    if (!pool.current.length || cards.current.filter(Boolean).length < NUM_CARDS) return;
+    stride.current = (cards.current[0].el.offsetWidth || 220) + CARD_GAP;
+    ready.current = true;
+    slots.current = Array.from({ length: NUM_CARDS }, (_, i) => i);
+    for (let i = 0; i < NUM_CARDS; i++) paintCard(i, nextAuction());
+  }
 
   useEffect(() => {
-    let stopped = false;
+    const tick = () => {
+      if (!drag.current.on) {
+        vel.current += (SPEED - vel.current) * 0.04;
+        scroll.current += vel.current;
+      }
+      if (ready.current) {
+        const s  = slots.current;
+        const sc = scroll.current;
+        const st = stride.current;
+        const cardW = st - CARD_GAP;
+        for (let i = 0; i < NUM_CARDS; i++) {
+          const x = s[i] * st - sc;
+          if (x < -(cardW + 10 * st)) {
+            s[i] = Math.max(...s) + 1;
+            paintCard(i, nextAuction());
+          }
+          if (cards.current[i]) {
+            cards.current[i].el.style.transform = `translateX(${s[i] * st - sc}px)`;
+          }
+        }
+      }
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf.current);
+  }, []);
+
+  const onPointerDown = e => {
+    drag.current = { on: true, startX: e.clientX, startScroll: scroll.current, delta: 0, target: e.target, lastX: e.clientX, lastTime: performance.now() };
+    vel.current = 0;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.currentTarget.style.cursor = 'grabbing';
+  };
+  const onPointerMove = e => {
+    if (!drag.current.on) return;
+    const now = performance.now();
+    const dt = Math.max(now - drag.current.lastTime, 1);
+    const dx = e.clientX - drag.current.startX;
+    drag.current.delta = Math.abs(dx);
+    vel.current = (-(e.clientX - drag.current.lastX) / dt) * 16;
+    drag.current.lastX = e.clientX;
+    drag.current.lastTime = now;
+    scroll.current = drag.current.startScroll - dx;
+  };
+  const onPointerUp = e => { drag.current.on = false; e.currentTarget.style.cursor = 'grab'; };
+  const onPointerCancel = () => { drag.current.on = false; };
+  const onCarouselClick = e => {
+    if (drag.current.delta > 5) return;
+    const card = drag.current.target?.closest('[data-auction-id]');
+    if (card) navigate(`/auctions/${card.dataset.auctionId}`);
+  };
+
+  const regCard = (i, el) => {
+    if (!el || cards.current[i]) return;
+    cards.current[i] = {
+      el,
+      seller:   el.querySelector('.ac-seller'),
+      location: el.querySelector('.ac-location'),
+      ends:     el.querySelector('.ac-ends'),
+      count:    el.querySelector('.ac-count'),
+    };
+    if (pool.current.length) tryInit(pool.current);
+  };
+
+  // Fetch auctions
+  useEffect(() => {
     fetch(`${API}/auctions`)
       .then(r => r.json())
       .then(data => {
-        setAuctions(data);
-        if (!data.length || stopped) return;
-        const ids = data.filter(a => a.vehicles_listed > 0).map(a => a.auction_id).join(',');
-        if (!ids) return;
-
-        const connect = () => {
-          if (stopped) return;
-          const source = new EventSource(`${API}/stream/multi?auctions=${ids}`);
-          source.onmessage = (e) => {
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'ended') {
-              setAuctions(prev => prev.filter(a => a.auction_id !== msg.auction_id));
-            }
-          };
-          source.onerror = () => {
-            source.close();
-            if (!stopped) setTimeout(connect, 3000);
-          };
-          sseRef.current = source;
-        };
-
-        connect();
+        const sanitized = data.map(sanitize);
+        setAuctionList(sanitized);
+        const soonest = [...sanitized]
+          .filter(c => c.closes_at)
+          .sort((a, b) => new Date(a.closes_at) - new Date(b.closes_at));
+        tryInit(soonest);
       })
-      .catch(console.error);
-    return () => { stopped = true; sseRef.current?.close(); };
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!token) return;
-    authFetch(token, `${API}/saved-auctions`)
-      .then(r => r.json())
-      .then(data => setSavedIds(new Set(data.map(a => a.auction_id))))
-      .catch(console.error);
-  }, [token]);
+  if (loading) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>Loading auctions…</div>;
+  if (!auctionList.length) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>No active auctions.</div>;
 
-  const toggleSave = async (e, auctionId) => {
-    e.stopPropagation();
-    if (!token) { navigate('/login'); return; }
-    const isSaved = savedIds.has(auctionId);
-    await authFetch(token, `${API}/saved-auctions/${auctionId}`, { method: isSaved ? 'DELETE' : 'POST' });
-    setSavedIds(prev => {
-      const next = new Set(prev);
-      isSaved ? next.delete(auctionId) : next.add(auctionId);
-      return next;
-    });
-  };
-
-  const FAR_FUTURE = '9999-12-31T00:00:00.000Z';
-  const active = auctions
-    .filter(a => a.auction_status !== 'completed' && a.vehicles_listed > 0)
-    .sort((a, b) => (a.closes_at || FAR_FUTURE).localeCompare(b.closes_at || FAR_FUTURE));
-  const getStateLabel = (a) => a.seller_state || a.region_id;
-  const states = [...new Set(active.map(getStateLabel))].sort();
-  const byState = states.reduce((acc, s) => {
-    acc[s] = active.filter(a => getStateLabel(a) === s);
-    return acc;
-  }, {});
-
-  const toggleState = (state) => {
-    setOpenStates(prev => {
-      const next = new Set(prev);
-      next.has(state) ? next.delete(state) : next.add(state);
-      return next;
-    });
-  };
+  const stateGroups = groupByState(auctionList);
 
   return (
     <div className="page-content">
-      {states.map(state => {
-        const stateAuctions = byState[state];
-        if (!stateAuctions.length) return null;
-        const isOpen = openStates.has(state);
-        const regions = [...new Set(stateAuctions.map(a => a.region_id))].sort();
-
-        return (
-          <div key={state} className="state-section">
-            <div className="state-section-header" onClick={() => toggleState(state)}>
-              <span className="state-section-label">{state}</span>
-              <div className="state-section-right">
-                <span className="state-section-count">{stateAuctions.length} auction{stateAuctions.length !== 1 ? 's' : ''}</span>
-                <span className="state-section-toggle">{isOpen ? '▲' : '▼'}</span>
+      <section className="auctions-soon-section">
+        <div className="auctions-section-title">Ending Soon</div>
+        <div
+          className="auctions-carousel-outer"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
+          onClick={onCarouselClick}
+        >
+          <div className="auctions-carousel-track" style={{ position: 'relative' }}>
+            {Array.from({ length: NUM_CARDS }, (_, i) => (
+              <div
+                key={i}
+                ref={el => regCard(i, el)}
+                style={{ position: 'absolute', top: 0, left: 0, willChange: 'transform' }}
+              >
+                <div className="auction-card-top">
+                  <div className="auction-card-seller ac-seller"></div>
+                </div>
+                <div className="auction-card-divider" />
+                <div className="auction-card-info">
+                  <div className="auction-card-info-row">
+                    <span className="info-label">Location</span>
+                    <span className="ac-location"></span>
+                  </div>
+                  <div className="auction-card-info-row">
+                    <span className="ac-ends" style={{ fontSize: 12, color: 'var(--text-secondary)' }}></span>
+                  </div>
+                </div>
+                <div className="auction-card-footer">
+                  <span className="ac-count vehicles-count"></span>
+                </div>
               </div>
-            </div>
-
-            {isOpen && (
-              <div className="state-body">
-                {regions.map(regionId => {
-                  const regionAuctions = stateAuctions.filter(a => a.region_id === regionId);
-                  if (!regionAuctions.length) return null;
-                  const regionLabel = REGION_LABEL[regionId] || regionId;
-                  const photo = getRegionPhoto(regionId);
-
-                  return (
-                    <div key={regionId} className="region-section">
-                      <div
-                        className="region-hero"
-                        style={photo ? { backgroundImage: `url(${photo})`, backgroundSize: 'cover', backgroundPosition: 'center center' } : {}}
-                      >
-                        <div className="region-hero-overlay">
-                          <h2 className="region-hero-title">{regionLabel}</h2>
-                        </div>
-                      </div>
-
-                      <div className="auction-grid">
-                        {regionAuctions.map(a => (
-                          <div
-                            key={a.auction_id}
-                            className={`auction-card${a.vehicles_listed > 0 ? ' has-vehicles' : ''}`}
-                            onClick={() => navigate(`/auctions/${a.auction_id}`)}
-                          >
-                            <div className="auction-card-top">
-                              <div className="auction-card-seller">{a.seller_name || a.auction_id}</div>
-                            </div>
-
-                            <div className="auction-card-divider" />
-
-                            <div className="auction-card-info">
-                              {a.closes_at && (
-                                <div className="auction-card-info-row">
-                                  <span className="info-label">Starts</span>
-                                  <span>{new Date(a.closes_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                                </div>
-                              )}
-                              <div className="auction-card-info-row">
-                                <span className="info-label">Vehicles</span>
-                                <span className={a.vehicles_listed > 0 ? 'vehicles-count' : 'vehicles-none'}>
-                                  {a.vehicles_listed > 0 ? a.vehicles_listed : 'None listed'}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="auction-card-divider" />
-
-                            <div className="auction-card-footer">
-                              <a
-                                className="btn"
-                                href={`https://mp.autura.com/auctions?seller=${a.region_id}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={e => e.stopPropagation()}
-                              >
-                                Listing
-                              </a>
-                              <button
-                                className={`btn${savedIds.has(a.auction_id) ? ' saved' : ''}`}
-                                onClick={e => toggleSave(e, a.auction_id)}
-                              >
-                                {savedIds.has(a.auction_id) ? 'Saved' : 'Save'}
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            ))}
           </div>
-        );
-      })}
+        </div>
+      </section>
+
+      {stateGroups.map(([state, stateCards]) => (
+        <section key={state} className="auctions-state-group">
+          <div className="auctions-section-title">{state}</div>
+          <div className="auctions-pair-grid">
+            {stateCards.map(card => (
+              <AuctionCard key={card.id} card={card} onClick={() => navigate(`/auctions/${card.id}`)} />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 };

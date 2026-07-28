@@ -34,13 +34,18 @@ export default function HomePage() {
   function nextVehicle() {
     const p = pool.current;
     if (!p.length) return null;
-    const v = p[poolIdx.current % p.length];
-    poolIdx.current++;
-    return v;
+    const now = Date.now();
+    for (let tries = 0; tries < p.length; tries++) {
+      const v = p[poolIdx.current % p.length];
+      poolIdx.current++;
+      if (!v.bid_expiration || new Date(v.bid_expiration).getTime() > now) return v;
+    }
+    return null;
   }
 
   function paintCard(i, v) {
     if (!v || !cards.current[i]) return;
+    cards.current[i].vehicle = v;
     const { el, img, name, bid, auction, closes } = cards.current[i];
     let src = '';
     try { src = JSON.parse(v.images)[0] || ''; } catch {}
@@ -61,7 +66,7 @@ export default function HomePage() {
     } else {
       closes.style.display = 'none';
     }
-    el.dataset.auctionId = v.auction_id;
+    el.dataset.auctionId = v.region_id || v.auction_id;
     el.dataset.vin = v.vin;
   }
 
@@ -79,7 +84,18 @@ export default function HomePage() {
     const fetchPool = async () => {
       try {
         const data = await fetch(`${API}/vehicles?limit=500`).then(r => r.json());
-        pool.current = shuffle(data.filter(v => v.images_count > 0 && v.images));
+        const now = Date.now();
+        pool.current = shuffle(data.filter(v =>
+          v.images_count > 0 && v.images &&
+          (!v.bid_expiration || new Date(v.bid_expiration).getTime() > now)
+        ));
+        if (ready.current) {
+          cards.current.forEach((card, i) => {
+            if (card?.vehicle?.bid_expiration && new Date(card.vehicle.bid_expiration).getTime() < now) {
+              paintCard(i, nextVehicle());
+            }
+          });
+        }
         tryInit();
       } catch {}
     };

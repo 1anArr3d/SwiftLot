@@ -2,17 +2,12 @@
 Auction update listener — mp.autura.com via Ably WebSocket.
 
 Subscribes to public:auction:{auctionId}:updates channels.
-Ably is a dumb ping bus — no bid data in the payload.
-
-On ping:
-  debounce 15s → fetch /auctions/listings/{item_key} for each vehicle
-  in that auction (parallel) → update DB → push SSE snapshot.
+NEW_BID messages carry the full bid payload — parse directly, no API call needed.
 """
 import asyncio
+import json
 import threading
-import time
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from ably import AblyRealtime
@@ -23,15 +18,12 @@ logger = logging.getLogger(__name__)
 ABLY_AUTH_URL  = "https://mp.autura.com/ably-auth"
 CHANNEL_PREFIX = "public:auction:"
 CHANNEL_SUFFIX = ":updates"
-DEBOUNCE_SECS  = 15
 
 _event_loop: asyncio.AbstractEventLoop | None = None
 _clients:       dict[str, list]   = {}   # auction_id → list[asyncio.Queue]
 _subscriptions: dict[str, object] = {}   # auction_id → Ably channel
-_debounce:      dict[str, float]  = {}   # auction_id → last handled monotonic time
 _ably: AblyRealtime | None = None
 _lock = threading.Lock()
-_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="detail-fetch")
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop):
@@ -79,53 +71,34 @@ def _vehicle_snapshot(auction_id: str) -> dict:
 
 
 async def _on_update(auction_id: str, message):
-    """
-    Handle Ably ping for auction_id.
-    Debounce → parallel detail fetches → DB update → SSE broadcast.
-    """
     try:
-        now = time.monotonic()
-        if now - _debounce.get(auction_id, 0) < DEBOUNCE_SECS:
+        raw = getattr(message, 'data', None)
+        if not raw:
             return
-        _debounce[auction_id] = now
+        data = json.loads(raw) if isinstance(raw, str) else raw
 
-        rows = query(
-            "SELECT item_key FROM vehicles WHERE auction_id = %s AND item_key IS NOT NULL",
-            (auction_id,),
-        )
-        if not rows:
-            logger.debug("No vehicles in DB for auction %s — skipping detail fetch", auction_id)
+        bid = data.get('bid', {})
+        bid_cents = bid.get('bid_amount')
+        bid_expiration = (bid.get('auction') or {}).get('bidding_end_at')
+
+        if bid_cents is None:
             return
 
-        item_keys = [r["item_key"] for r in rows]
-        logger.info("Ping auction %s → fetching %d vehicle detail(s)", auction_id, len(item_keys))
+        bid_amount = bid_cents / 100  # stored as dollars to match feed_scraper convention
 
-        from .autura_api import get_listing_detail
-        loop = asyncio.get_event_loop()
-        results = await asyncio.gather(
-            *[loop.run_in_executor(_executor, get_listing_detail, ik) for ik in item_keys],
-            return_exceptions=True,
-        )
-
-        updated = 0
         with get_db() as conn:
-            for ik, result in zip(item_keys, results):
-                if isinstance(result, Exception):
-                    logger.warning("Detail fetch failed for %s: %s", ik, result)
-                    continue
-                conn.execute(
-                    """UPDATE vehicles
-                       SET current_bid    = %s,
-                           bid_expiration = COALESCE(%s, bid_expiration)
-                       WHERE item_key = %s""",
-                    (result["current_bid"], result["bid_expiration"], ik),
-                )
-                updated += 1
+            conn.execute(
+                """UPDATE vehicles
+                   SET current_bid    = %s,
+                       bid_expiration = COALESCE(%s, bid_expiration)
+                   WHERE auction_id = %s""",
+                (bid_amount, bid_expiration, auction_id),
+            )
 
         _broadcast(auction_id, _vehicle_snapshot(auction_id))
-        logger.info("auction %s: updated %d/%d vehicle(s)", auction_id, updated, len(item_keys))
+        logger.info("auction %s: bid → $%.2f", auction_id, bid_amount)
     except Exception:
-        logger.exception("Error handling ping for auction %s", auction_id)
+        logger.exception("Error handling NEW_BID for auction %s", auction_id)
 
 
 async def _subscribe_async(auction_id: str):
@@ -188,26 +161,24 @@ def start_periodic_scraper(interval: int = 7200):
                 logger.info("Periodic scraper: full feed rescrape complete")
             except Exception:
                 logger.exception("Periodic scraper failed")
+
+            try:
+                from .inspection_scraper import run_inspection_batch
+                rows = query(
+                    "SELECT v.vin FROM vehicles v "
+                    "JOIN auctions a ON a.auction_id = v.auction_id "
+                    "WHERE v.last_recorded_odo IS NULL AND a.seller_state = 'TX'"
+                )
+                vins = [r["vin"] for r in rows]
+                if vins:
+                    logger.info("Inspection batch: %d unchecked TX vehicles", len(vins))
+                    run_inspection_batch(vins)
+                    logger.info("Inspection batch complete")
+            except Exception:
+                logger.exception("Inspection batch failed")
+
     threading.Thread(target=_run, daemon=True, name="periodic-scraper").start()
 
-
-def start_reconciler(interval: int = 600):
-    """Fallback full rescrape for missed Ably pings."""
-    def _run():
-        while True:
-            threading.Event().wait(interval)
-            try:
-                from .feed_scraper import run_full_feed
-                run_full_feed()
-                logger.info("Reconciler: full rescrape complete")
-            except Exception:
-                logger.exception("Reconciler scrape failed")
-    threading.Thread(target=_run, daemon=True, name="update-reconciler").start()
-
-
-def start_retry_checker():
-    """Placeholder — retry logic handled by reconciler."""
-    pass
 
 
 def add_client(auction_id: str, queue):

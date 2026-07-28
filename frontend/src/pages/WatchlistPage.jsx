@@ -6,10 +6,17 @@ import FilterSection from '../components/FilterSection';
 import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
 
+const parseImages = (raw) => { try { return JSON.parse(raw); } catch { return []; } };
+const fmtAvgSale = (s, fmt$) => {
+  if (!s) return '—';
+  return `${s.approx ? '~' : ''}${fmt$(s.avg_sale)} avg · ${s.count} sale${s.count !== 1 ? 's' : ''} (${fmt$(s.min_sale)}–${fmt$(s.max_sale)})`;
+};
+
 const WatchlistPage = () => {
   const navigate = useNavigate();
   const { token } = useAuth();
   const [vehicles, setVehicles] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [liveBids, setLiveBids] = useState({});
   const [histStats, setHistStats] = useState({});
   const [expandedVins, setExpandedVins] = useState(new Set());
@@ -26,7 +33,8 @@ const WatchlistPage = () => {
     authFetch(token, `${API}/garage`)
       .then(r => r.json())
       .then(setVehicles)
-      .catch(console.error);
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, [token]);
 
   const statsKey = (v) => `${v.make}|${v.model}|${v.year}`;
@@ -41,17 +49,16 @@ const WatchlistPage = () => {
       const k = statsKey(v);
       if (seen.has(k)) return false;
       seen.add(k); return true;
-    });
-    Promise.all(combos.map(v =>
-      fetch(`${API}/historical/stats?make=${encodeURIComponent(v.make)}&model=${encodeURIComponent(v.model)}&year=${v.year}`)
-        .then(r => r.json())
-        .then(data => [statsKey(v), data])
-        .catch(() => null)
-    )).then(results => {
-      const map = {};
-      results.forEach(r => { if (r && r[1].count > 0) map[r[0]] = r[1]; });
-      setHistStats(map);
-    });
+    }).map(v => ({ make: v.make, model: v.model, year: v.year }));
+    if (!combos.length) return;
+    fetch(`${API}/historical/stats/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(combos),
+    })
+      .then(r => r.json())
+      .then(data => setHistStats(Object.fromEntries(Object.entries(data).filter(([, v]) => v.count > 0))))
+      .catch(console.error);
   }, [vehicles.length]);
 
   const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');
@@ -167,6 +174,12 @@ const WatchlistPage = () => {
             <input type="range" min={minYear} max={maxYear} value={yearMax}
               onChange={e => setYearRange([yearRange[0], parseInt(e.target.value)])} className="slider" />
           </FilterSection>
+          <FilterSection title="Make">
+            <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
+          </FilterSection>
+          <FilterSection title="Model">
+            <ChecklistFilter options={uniqueOpts('model')} selected={filters.model} onChange={v => setFilter('model', v)} />
+          </FilterSection>
           <FilterSection title="Odometer">
             <div className="year-range-labels">
               <span>{odoMin.toLocaleString()} mi</span><span>{odoMax.toLocaleString()} mi</span>
@@ -175,12 +188,6 @@ const WatchlistPage = () => {
               onChange={e => setOdoRange([parseInt(e.target.value), odoRange[1]])} className="slider" />
             <input type="range" min={odoSliderMin} max={odoSliderMax} step={10000} value={odoMax}
               onChange={e => setOdoRange([odoRange[0], parseInt(e.target.value)])} className="slider" />
-          </FilterSection>
-          <FilterSection title="Make">
-            <ChecklistFilter options={uniqueOpts('make')} selected={filters.make} onChange={v => setFilter('make', v)} />
-          </FilterSection>
-          <FilterSection title="Model">
-            <ChecklistFilter options={uniqueOpts('model')} selected={filters.model} onChange={v => setFilter('model', v)} />
           </FilterSection>
           <FilterSection title="Status">
             <ChecklistFilter options={uniqueOpts('start_status')} selected={filters.start_status} onChange={v => setFilter('start_status', v)} />
@@ -217,7 +224,7 @@ const WatchlistPage = () => {
             </thead>
             <tbody>
               {filtered.map((car, idx) => {
-                const images = car.images ? (() => { try { return JSON.parse(car.images); } catch { return []; } })() : [];
+                const images = car.images ? parseImages(car.images) : [];
                 const isExpanded = expandedVins.has(car.vin);
                 return [
                   <tr
@@ -269,7 +276,7 @@ const WatchlistPage = () => {
                                 <div className="detail-item"><span className="detail-label">Current Bid</span><span>{fmt$(getBid(car))}</span></div>
                               )}
                               {histStats[statsKey(car)] && (
-                                <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{fmt$(histStats[statsKey(car)].avg_sale)}</span></div>
+                                <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{fmtAvgSale(histStats[statsKey(car)], fmt$)}</span></div>
                               )}
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
@@ -278,7 +285,7 @@ const WatchlistPage = () => {
                             </div>
                             <div className="expanded-actions">
                               {car.auction_id && (
-                                <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.auction_id}`); }}>
+                                <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.region_id}`); }}>
                                   View Auction
                                 </button>
                               )}
@@ -301,7 +308,10 @@ const WatchlistPage = () => {
                   )
                 ];
               })}
-              {filtered.length === 0 && (
+              {loading && (
+                <tr><td colSpan={COLS} className="empty-msg">Loading…</td></tr>
+              )}
+              {!loading && filtered.length === 0 && (
                 <tr><td colSpan={COLS} className="empty-msg">No saved vehicles.</td></tr>
               )}
             </tbody>
