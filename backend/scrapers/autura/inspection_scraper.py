@@ -16,16 +16,7 @@ from db import get_db
 SEARCH_URL = "https://www.mytxcar.org/TXCar_Net/SearchVehicleTestHistory.aspx"
 HISTORY_URL = "https://www.mytxcar.org/TXCar_Net/VehicleTestHistory.aspx"
 
-_STEALTH_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-    "--disable-infobars",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-dev-shm-usage",
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--window-size=1280,800",
-]
+_LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
 
 class _SessionExpired(Exception):
     pass
@@ -107,16 +98,11 @@ def _acquire_session() -> cffi_requests.Session:
     with sync_playwright() as p:
         headless = os.getenv("INSPECTION_HEADLESS", "false").lower() == "true"
         try:
-            browser = p.chromium.launch(headless=headless, channel="chrome", args=_STEALTH_ARGS)
+            browser = p.chromium.launch(headless=headless, channel="chrome", args=_LAUNCH_ARGS)
         except Exception:
-            browser = p.chromium.launch(headless=headless, args=_STEALTH_ARGS)
+            browser = p.chromium.launch(headless=headless, args=_LAUNCH_ARGS)
 
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        )
-        page = context.new_page()
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        page = browser.new_page()
         page.goto("https://www.mytxcar.org/TXCar_Net/VehicleTestDetail.aspx", timeout=60000)
 
         try:
@@ -146,9 +132,8 @@ def _acquire_session() -> cffi_requests.Session:
         page.locator('input[type="submit"]').click()
         page.wait_for_selector("#txtVin", timeout=15000)
 
-        cookies = {c["name"]: c["value"] for c in context.cookies()}
+        cookies = {c["name"]: c["value"] for c in page.context.cookies()}
         session_id = cookies.get("ASP.NET_SessionId")
-        context.close()
         browser.close()
 
     print(f"[inspection] Session acquired via browser: {session_id}")
