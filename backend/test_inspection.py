@@ -19,9 +19,8 @@ def main():
         SELECT v.vin, v.year, v.make, v.model, a.seller_state
         FROM vehicles v
         JOIN auctions a ON a.auction_id = v.auction_id
-        WHERE v.last_recorded_odo IS NULL
+        WHERE (v.last_recorded_odo IS NULL OR v.last_recorded_odo = 'N/A')
           AND a.seller_state = 'TX'
-        LIMIT 3
     """)
 
     if not rows:
@@ -41,11 +40,8 @@ def main():
     print("\nRunning inspection batch...")
     run_inspection_batch(vins)
 
-    print("\nResults from DB:")
-    for vin in vins:
-        result = query("SELECT last_recorded_odo FROM vehicles WHERE vin = %s", (vin,))
-        if result:
-            print(f"  {vin}: {result[0]['last_recorded_odo']}")
+    done = query("SELECT COUNT(*) as n FROM vehicles WHERE last_recorded_odo IS NOT NULL AND last_recorded_odo != 'N/A' AND vin = ANY(%s)", (vins,))
+    print(f"\nDone: {done[0]['n']}/{len(vins)} VINs have odometer records")
 
 if __name__ == "__main__":
     main()
