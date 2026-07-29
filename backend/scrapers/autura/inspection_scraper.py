@@ -147,13 +147,11 @@ def _reset_session():
 # ── VIN lookup ────────────────────────────────────────────────────────────────
 
 def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
-    time.sleep(1.5)
     r = session.get(SEARCH_URL, timeout=15)
     if "txtVin" not in r.text:
         raise _SessionExpired()
     hidden = _extract_hidden(r.text)
 
-    time.sleep(1)
     r = session.post(SEARCH_URL, data={**hidden, "txtVin": vin, "btnSearch": "Search"}, timeout=15)
     html = r.text
 
@@ -178,7 +176,6 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
             "hidTasId":       link.get("tas_id", ""),
         }
         try:
-            time.sleep(0.8)
             r = session.post(HISTORY_URL, data=detail_data, timeout=15)
             odo = _OdometerParser()
             odo.feed(r.text)
