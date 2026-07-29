@@ -211,10 +211,14 @@ def _save_history(vin: str, results: list[dict]):
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def run_inspection_batch(vins: list[str]):
-    """Run inspections for a list of VINs sequentially, sharing one session."""
+def run_inspection_batch(vins: list[str], workers: int = 8):
+    """Run inspections for a list of VINs in parallel, sharing one session."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     session = _get_session()
-    for vin in vins:
+
+    def _process(vin: str):
+        nonlocal session
         try:
             results = _lookup_vin(vin, session)
             _save_history(vin, results)
@@ -231,3 +235,8 @@ def run_inspection_batch(vins: list[str]):
                 print(f"[inspection] Error for {vin} after re-auth: {e}")
         except Exception as e:
             print(f"[inspection] Error for {vin}: {e}")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_process, vin) for vin in vins]
+        for f in as_completed(futures):
+            f.result()
