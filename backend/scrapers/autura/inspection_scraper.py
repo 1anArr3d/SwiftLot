@@ -5,23 +5,33 @@ Session is acquired once per batch and reused across all lookups.
 import os
 import re
 import time
+import threading
 from html.parser import HTMLParser
 
 from curl_cffi import requests as cffi_requests
 from playwright.sync_api import sync_playwright
 
-import threading
 from db import get_db
 
 SEARCH_URL = "https://www.mytxcar.org/TXCar_Net/SearchVehicleTestHistory.aspx"
 HISTORY_URL = "https://www.mytxcar.org/TXCar_Net/VehicleTestHistory.aspx"
+
+_STEALTH_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-infobars",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-dev-shm-usage",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--window-size=1280,800",
+]
 
 class _SessionExpired(Exception):
     pass
 
 _http_session: cffi_requests.Session | None = None
 _session_lock = threading.Lock()
-_lookup_lock = threading.Lock()
 
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
@@ -75,34 +85,19 @@ def _extract_hidden(html: str) -> dict:
 
 def _acquire_session() -> cffi_requests.Session:
     """Launch browser, solve Turnstile once, return HTTP session with cookie."""
-    import asyncio
     if os.name == "nt":
+        import asyncio
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         asyncio.set_event_loop(asyncio.new_event_loop())
+
     print("[inspection] Launching browser to solve Turnstile...")
-    _stealth_args = [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-infobars",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-dev-shm-usage",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--window-size=1280,800",
-    ]
     with sync_playwright() as p:
         headless = os.getenv("INSPECTION_HEADLESS", "false").lower() == "true"
         try:
-            browser = p.chromium.launch(
-                headless=headless,
-                channel="chrome",
-                args=_stealth_args,
-            )
+            browser = p.chromium.launch(headless=headless, channel="chrome", args=_STEALTH_ARGS)
         except Exception:
-            browser = p.chromium.launch(
-                headless=headless,
-                args=_stealth_args,
-            )
+            browser = p.chromium.launch(headless=headless, args=_STEALTH_ARGS)
+
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -111,10 +106,11 @@ def _acquire_session() -> cffi_requests.Session:
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page.goto("https://www.mytxcar.org/TXCar_Net/VehicleTestDetail.aspx", timeout=60000)
 
+        # Wait for Turnstile to auto-solve; if it doesn't, try clicking it
         try:
             page.wait_for_function(
                 "document.querySelector('[name=\"cf-turnstile-response\"]').value.length > 0",
-                timeout=8000
+                timeout=8000,
             )
         except Exception:
             try:
@@ -132,7 +128,7 @@ def _acquire_session() -> cffi_requests.Session:
                 pass
             page.wait_for_function(
                 "document.querySelector('[name=\"cf-turnstile-response\"]').value.length > 0",
-                timeout=30000
+                timeout=30000,
             )
 
         page.locator('input[type="submit"]').click()
@@ -146,7 +142,7 @@ def _acquire_session() -> cffi_requests.Session:
     print(f"[inspection] Session acquired: {session_id}")
     return cffi_requests.Session(
         impersonate="chrome120",
-        cookies={"ASP.NET_SessionId": session_id}
+        cookies={"ASP.NET_SessionId": session_id},
     )
 
 
@@ -189,7 +185,6 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
         if year in seen_years or len(results) >= 3:
             continue
         seen_years.add(year)
-
         detail_data = {
             **result_hidden,
             "hidAction":      "SelectSearch",
@@ -227,7 +222,7 @@ def _save_history(vin: str, results: list[dict]):
                        vin = EXCLUDED.vin,
                        inspection_date = EXCLUDED.inspection_date,
                        mileage = EXCLUDED.mileage""",
-                (f"{vin}_{i}", vin, res["date"], res["odometer"])
+                (f"{vin}_{i}", vin, res["date"], res["odometer"]),
             )
         display = "\n".join(f"{r['date']}: {r['odometer']:,}" for r in results)
         conn.execute("UPDATE vehicles SET last_recorded_odo = %s WHERE vin = %s", (display, vin))
@@ -235,34 +230,23 @@ def _save_history(vin: str, results: list[dict]):
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-
-def run_inspection_batch(vins: list[str], workers: int = 10):
-    """Run inspections for a list of VINs in parallel, sharing one session."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
+def run_inspection_batch(vins: list[str]):
+    """Run inspections for a list of VINs sequentially, sharing one session."""
     session = _get_session()
-
-    def _process(vin: str):
-        nonlocal session
-        with _lookup_lock:
+    for vin in vins:
+        try:
+            results = _lookup_vin(vin, session)
+            _save_history(vin, results)
+            print(f"[inspection] {vin}: {len(results)} record(s)")
+        except _SessionExpired:
+            print("[inspection] Session expired — re-acquiring...")
+            _reset_session()
+            session = _get_session()
             try:
                 results = _lookup_vin(vin, session)
                 _save_history(vin, results)
                 print(f"[inspection] {vin}: {len(results)} record(s)")
-            except _SessionExpired:
-                print("[inspection] Session expired — re-acquiring...")
-                _reset_session()
-                session = _get_session()
-                try:
-                    results = _lookup_vin(vin, session)
-                    _save_history(vin, results)
-                    print(f"[inspection] {vin}: {len(results)} record(s)")
-                except Exception as e:
-                    print(f"[inspection] Error for {vin} after re-auth: {e}")
             except Exception as e:
-                print(f"[inspection] Error for {vin}: {e}")
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(_process, vin) for vin in vins]
-        for future in as_completed(futures):
-            future.result()
+                print(f"[inspection] Error for {vin} after re-auth: {e}")
+        except Exception as e:
+            print(f"[inspection] Error for {vin}: {e}")
