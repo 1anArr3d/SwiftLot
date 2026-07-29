@@ -84,13 +84,26 @@ def _extract_hidden(html: str) -> dict:
 # ── Session management ────────────────────────────────────────────────────────
 
 def _acquire_session() -> cffi_requests.Session:
-    """Launch browser, solve Turnstile once, return HTTP session with cookie."""
+    """Get an ASP.NET session for mytxcar.org.
+
+    Tries plain HTTP first (SearchVehicleTestHistory has no Turnstile).
+    Falls back to Playwright if the page is gated.
+    """
+    print("[inspection] Acquiring session via HTTP...")
+    sess = cffi_requests.Session(impersonate="chrome120")
+    r = sess.get(SEARCH_URL, timeout=20)
+    if "txtVin" in r.text:
+        session_id = r.cookies.get("ASP.NET_SessionId")
+        print(f"[inspection] Session acquired via HTTP: {session_id}")
+        return sess
+
+    # Search page is gated — fall back to Playwright on the detail page
+    print("[inspection] HTTP gated, launching browser to solve Turnstile...")
     if os.name == "nt":
         import asyncio
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         asyncio.set_event_loop(asyncio.new_event_loop())
 
-    print("[inspection] Launching browser to solve Turnstile...")
     with sync_playwright() as p:
         headless = os.getenv("INSPECTION_HEADLESS", "false").lower() == "true"
         try:
@@ -106,7 +119,6 @@ def _acquire_session() -> cffi_requests.Session:
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         page.goto("https://www.mytxcar.org/TXCar_Net/VehicleTestDetail.aspx", timeout=60000)
 
-        # Wait for Turnstile to auto-solve; if it doesn't, try clicking it
         try:
             page.wait_for_function(
                 "document.querySelector('[name=\"cf-turnstile-response\"]').value.length > 0",
@@ -139,7 +151,7 @@ def _acquire_session() -> cffi_requests.Session:
         context.close()
         browser.close()
 
-    print(f"[inspection] Session acquired: {session_id}")
+    print(f"[inspection] Session acquired via browser: {session_id}")
     return cffi_requests.Session(
         impersonate="chrome120",
         cookies={"ASP.NET_SessionId": session_id},
