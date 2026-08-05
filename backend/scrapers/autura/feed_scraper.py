@@ -329,12 +329,13 @@ def _handle_ended_auctions(active_ids: set[str], sold_listings: list[dict]):
     from scrapers.autura import auction_listener as listener
 
     open_rows = query(
-        "SELECT auction_id FROM auctions WHERE auction_status NOT IN ('completed', 'ENDED') AND source = 'autura'"
+        "SELECT auction_id, region_id FROM auctions WHERE auction_status NOT IN ('completed', 'ENDED') AND source = 'autura'"
     )
-    ended = [r["auction_id"] for r in open_rows if r["auction_id"] not in active_ids]
-    if not ended:
+    ended_rows = [r for r in open_rows if r["auction_id"] not in active_ids]
+    if not ended_rows:
         return
 
+    ended = [r["auction_id"] for r in ended_rows]
     ended_set = set(ended)
     relevant_sold = [
         l for l in sold_listings
@@ -354,5 +355,21 @@ def _handle_ended_auctions(active_ids: set[str], sold_listings: list[dict]):
         listener._broadcast(auction_id, {"type": "ended"})
 
     print(f"[feed] Closed {len(ended)} ended auction(s): {ended}")
+
+    # Fetch sold listings from each ended seller immediately while data is still available
+    seller_ids = list({r["region_id"] for r in ended_rows if r["region_id"]})
+    if seller_ids:
+        print(f"[feed] Fetching sold data for {len(seller_ids)} ended seller(s)...")
+        inserted = 0
+        for seller_id in seller_ids:
+            try:
+                _, sold = get_seller_listings(seller_id)
+                with get_db() as conn:
+                    for listing in sold:
+                        _insert_sold(conn, listing)
+                        inserted += 1
+            except Exception as e:
+                print(f"[feed] Sold fetch failed for seller {seller_id}: {e}")
+        print(f"[feed] Sold backfill: {inserted} listing(s) captured")
 
 
