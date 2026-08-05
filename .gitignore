@@ -31,3 +31,8 @@ backend.env
 
 # Claude Code local config
 .claude/
+
+# Data files
+*.csv
+sellers.txt
+auctions/
