@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
                 run_sold_backfill()
             except Exception as e:
                 print(f"[sold-backfill] Failed: {e}")
-            threading.Event().wait(604800)   # weekly
+            threading.Event().wait(86400)    # daily
     threading.Thread(target=_sold_backfill, daemon=True, name="sold-backfill").start()
 
     yield
