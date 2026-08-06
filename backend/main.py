@@ -24,10 +24,9 @@ async def lifespan(app: FastAPI):
 
     # Initial full scrape + subscribe
     def _startup():
-        listener.sync_with_db()
+        listener.sync_with_db()  # cold-start bootstrap: resubscribe from last-known DB state
         try:
-            scraper.scrape_all()
-            listener.sync_with_db()
+            scraper.scrape_all()  # reconciles subscriptions itself via listener.reconcile()
         except Exception as e:
             print(f"[autura] Startup scrape failed: {e}")
         try:
@@ -45,7 +44,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[inspection] Startup batch failed: {e}")
     threading.Thread(target=_startup, daemon=True).start()
-    listener.start_watchdog(interval=30)
+    listener.start_watchdog(interval=900)  # 15 min fallback safety net, not primary sync — see auction_listener.py
     listener.start_periodic_scraper(interval=7200)
 
     def _sold_backfill():
