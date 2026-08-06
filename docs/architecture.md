@@ -165,6 +165,16 @@ separately from the vehicle upsert.
 
 ---
 
+## Known issues (tracked, not fixed)
+
+1. **`unsubscribe_auction()` is never called.** `_handle_ended_auctions()` in
+   `feed_scraper.py` marks ended auctions `completed` and broadcasts `{"type":"ended"}`
+   to SSE clients, but never unsubscribes the corresponding Ably channel. Subscriptions
+   accumulate for the life of the process instead of being torn down when an auction ends.
+   Found 2026-08-06 while auditing Neon compute usage; out of scope for that fix.
+
+---
+
 ## What stays the same
 
 - Ably subscription management (subscribe_auction, unsubscribe_auction, sync_with_db)

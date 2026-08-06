@@ -260,6 +260,9 @@ def run_full_feed() -> dict:
 
     _handle_ended_auctions(active_ids, sold)
 
+    from scrapers.autura import auction_listener as listener
+    listener.reconcile(active_ids)
+
     print(f"[feed] Done: {len(active)} vehicles, {len(seen_auctions)} auctions, {len(sold)} sold")
     return {"vehicles": len(active), "auctions": len(seen_auctions), "sold": len(sold)}
 
@@ -353,6 +356,10 @@ def _handle_ended_auctions(active_ids: set[str], sold_listings: list[dict]):
 
     for auction_id in ended:
         listener._broadcast(auction_id, {"type": "ended"})
+        # TRACKED ISSUE: listener.unsubscribe_auction() is never called here (or anywhere).
+        # Ended auctions get their "completed" DB status and an SSE "ended" broadcast, but
+        # the Ably channel subscription is left open indefinitely. Not fixed here — see
+        # docs/architecture.md "Known issues".
 
     print(f"[feed] Closed {len(ended)} ended auction(s): {ended}")
 

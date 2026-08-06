@@ -130,15 +130,36 @@ def unsubscribe_auction(auction_id: str):
         asyncio.run_coroutine_threadsafe(_unsubscribe_async(auction_id), _event_loop)
 
 
+def reconcile(active_ids: set[str]):
+    """
+    Primary sync path. Called by run_full_feed() with the auction ids it just
+    confirmed active, entirely in-memory — no DB round trip. subscribe_auction()
+    is a no-op for ids already subscribed, so this is safe to call every scrape.
+    """
+    for auction_id in active_ids:
+        subscribe_auction(auction_id)
+
+
 def sync_with_db():
-    """Subscribe to all active auctions in DB."""
+    """
+    Fallback safety net only — NOT the primary sync path (see reconcile()).
+    Catches the case where a subscribe_auction() call from reconcile() silently
+    failed (e.g. exception in _subscribe_async). Queries Postgres, so this is
+    intentionally run infrequently by start_watchdog(); tightening its interval
+    does not improve normal-path status timeliness, which is bounded by the
+    scrape interval, not by this poll.
+    """
     rows = query("SELECT auction_id FROM auctions WHERE auction_status IN ('PRE_BID', 'ACTIVE')")
     for row in rows:
         subscribe_auction(row["auction_id"])
 
 
-def start_watchdog(interval: int = 30):
-    """Periodically re-sync subscriptions with active auctions in DB."""
+def start_watchdog(interval: int = 900):
+    """
+    Safety-net poll (default 15 min) — retries any subscribe_auction() call
+    that failed silently during the last reconcile(). Not the primary sync
+    path; see reconcile() and sync_with_db() docstrings.
+    """
     def _run():
         while True:
             try:
@@ -150,14 +171,13 @@ def start_watchdog(interval: int = 30):
 
 
 def start_periodic_scraper(interval: int = 7200):
-    """Full feed rescrape every N seconds, then re-sync subscriptions."""
+    """Full feed rescrape every N seconds. run_full_feed() reconciles subscriptions itself."""
     def _run():
         while True:
             threading.Event().wait(interval)
             try:
                 from .feed_scraper import run_full_feed
                 run_full_feed()
-                sync_with_db()
                 logger.info("Periodic scraper: full feed rescrape complete")
             except Exception:
                 logger.exception("Periodic scraper failed")
