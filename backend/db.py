@@ -36,11 +36,22 @@ class _ConnCtx:
         return _Conn(self._raw)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            self._raw.rollback()
-        else:
-            self._raw.commit()
-        _get_pool().putconn(self._raw)
+        # commit()/rollback() can itself raise if the connection already died
+        # (Neon killed it, network blip, etc). Must still reach putconn() in that
+        # case or the pool leaks a slot forever — close=True discards a broken
+        # connection instead of returning it to the free list for reuse.
+        broken = False
+        try:
+            if exc_type:
+                self._raw.rollback()
+            else:
+                self._raw.commit()
+        except Exception:
+            broken = True
+            if not exc_type:
+                raise
+        finally:
+            _get_pool().putconn(self._raw, close=broken)
 
 
 def get_db() -> _ConnCtx:
@@ -51,14 +62,22 @@ def get_db() -> _ConnCtx:
 def query(sql: str, args: tuple = (), one: bool = False):
     """Run a SELECT and return all rows (or one). Rows are dict-like."""
     raw = _get_pool().getconn()
+    broken = False
     try:
         with raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, args or None)
             rows = cur.fetchall()
             return (rows[0] if rows else None) if one else rows
+    except Exception:
+        broken = True
+        raise
     finally:
-        raw.rollback()  # no-op for reads; releases any implicit txn
-        _get_pool().putconn(raw)
+        if not broken:
+            try:
+                raw.rollback()  # no-op for reads; releases any implicit txn
+            except Exception:
+                broken = True
+        _get_pool().putconn(raw, close=broken)
 
 
 def init_db():
