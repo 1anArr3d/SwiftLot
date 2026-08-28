@@ -66,7 +66,7 @@ def get_auction(auction_id: str):
 @router.get("/auctions/{auction_id}/vehicles", response_model=list[Vehicle], tags=["auctions"])
 def get_auction_vehicles(auction_id: str, limit: int = 1000, offset: int = 0):
     rows = query(
-        "SELECT * FROM vehicles WHERE region_id = %s ORDER BY make, model, year LIMIT %s OFFSET %s",
+        "SELECT * FROM vehicles WHERE auction_id = %s ORDER BY make, model, year LIMIT %s OFFSET %s",
         (auction_id, limit, offset)
     )
     return [dict(row) for row in rows]
