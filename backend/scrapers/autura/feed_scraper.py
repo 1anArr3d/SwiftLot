@@ -222,20 +222,19 @@ def _insert_sold(conn, listing: dict):
 
 def run_full_feed() -> dict:
     """
-    Full single-pass feed scrape. Fetches every page once and upserts
+    Full single-pass feed scrape. Fetches listings for every seller and upserts
     vehicles, auctions, and historical_sales in one DB pass.
     Also detects ended auctions and runs inspection queuing.
     """
-    print("[feed] Fetching all pages...")
-    active, sold = get_all_feed()
-    print(f"[feed] {len(active)} active, {len(sold)} sold listings fetched")
+    all_active, all_sold = get_all_feed()
 
     seen_auctions: set[str] = set()
     active_ids:    set[str] = set()
 
+    print(f"[feed] {len(all_active)} active, {len(all_sold)} sold listings fetched")
     CHUNK = 100
-    for i in range(0, len(active), CHUNK):
-        chunk = active[i:i + CHUNK]
+    for i in range(0, len(all_active), CHUNK):
+        chunk = all_active[i:i + CHUNK]
         with get_db() as conn:
             for listing in chunk:
                 _upsert_vehicle(conn, listing)
@@ -246,10 +245,10 @@ def run_full_feed() -> dict:
                     if aid not in seen_auctions:
                         seen_auctions.add(aid)
                         _upsert_auction(conn, record)
-        print(f"[feed] {min(i + CHUNK, len(active))}/{len(active)} vehicles written")
+        print(f"[feed] {min(i + CHUNK, len(all_active))}/{len(all_active)} vehicles written")
 
     with get_db() as conn:
-        for listing in sold:
+        for listing in all_sold:
             _insert_sold(conn, listing)
         conn.execute("""
             UPDATE auctions a
@@ -258,13 +257,13 @@ def run_full_feed() -> dict:
             )
         """)
 
-    _handle_ended_auctions(active_ids, sold)
+    _handle_ended_auctions(active_ids, all_sold)
 
     from scrapers.autura import auction_listener as listener
     listener.reconcile(active_ids)
 
-    print(f"[feed] Done: {len(active)} vehicles, {len(seen_auctions)} auctions, {len(sold)} sold")
-    return {"vehicles": len(active), "auctions": len(seen_auctions), "sold": len(sold)}
+    print(f"[feed] Done: {len(all_active)} vehicles, {len(seen_auctions)} auctions, {len(all_sold)} sold")
+    return {"vehicles": len(all_active), "auctions": len(seen_auctions), "sold": len(all_sold)}
 
 
 # Alias for callers that still use scrape_all()

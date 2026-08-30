@@ -35,8 +35,6 @@ def get_auctions():
         WHERE source = 'autura'
           AND auction_status != 'completed'
         GROUP BY region_id
-        HAVING SUM(COALESCE(vehicles_listed, 0)) > 0
-            OR bool_or(vehicles_listed IS NULL)
         ORDER BY closes_at NULLS LAST
     """)
     return [dict(row) for row in rows]
@@ -67,8 +65,12 @@ def get_auction(auction_id: str):
 def get_auction_vehicles(auction_id: str, limit: int = 1000, offset: int = 0):
     rows = query(
         """SELECT v.* FROM vehicles v
-           JOIN auctions a ON a.auction_id = v.auction_id
-           WHERE v.region_id = %s AND a.auction_status != 'completed'
+           WHERE v.region_id = %s
+             AND NOT EXISTS (
+                 SELECT 1 FROM auctions a
+                 WHERE a.auction_id = v.auction_id
+                   AND a.auction_status = 'completed'
+             )
            ORDER BY v.make, v.model, v.year LIMIT %s OFFSET %s""",
         (auction_id, limit, offset)
     )
