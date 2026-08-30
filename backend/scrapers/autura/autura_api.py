@@ -150,20 +150,30 @@ def get_all_listings() -> list[dict]:
 
 def get_all_feed() -> tuple[list[dict], list[dict]]:
     """
-    Fetch all pages and return (active_listings, sold_listings).
-    Prefer this over get_all_listings() when you also need sold data.
+    Fetch all US listings using a central zip code with a large radius.
+    One call covers the entire continental US.
     """
-    first = get_listings_page(1)
-    total = first.get("total") or 0
+    # Liberal, KS — geographic center of the contiguous US
+    base = f"{BASE_URL}/auctions.data?distance=2000&zipCode=67901"
+
+    first_flat = _fetch_flat(f"{base}&page=1")
+    first_root = _decode(first_flat, first_flat[0])
+    first = (first_root.get("pages/auctions/Auctions") or {}).get("data") or {}
+
+    total    = first.get("total") or 0
     per_page = first.get("perPage") or 12
-    active = list(first.get("unitListings") or [])
-    sold = list(first.get("soldUnitListings") or [])
+    active   = list(first.get("unitListings") or [])
+    sold     = list(first.get("soldUnitListings") or [])
 
     total_pages = math.ceil(total / per_page) if per_page else 1
+    print(f"[autura] {total} total listings across {total_pages} pages")
+
     for p in range(2, total_pages + 1):
-        page_data = get_listings_page(p)
-        active.extend(page_data.get("unitListings") or [])
-        sold.extend(page_data.get("soldUnitListings") or [])
+        page_data_flat = _fetch_flat(f"{base}&page={p}")
+        page_root = _decode(page_data_flat, page_data_flat[0])
+        page = (page_root.get("pages/auctions/Auctions") or {}).get("data") or {}
+        active.extend(page.get("unitListings") or [])
+        sold.extend(page.get("soldUnitListings") or [])
 
     return active, sold
 
