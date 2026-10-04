@@ -1,6 +1,6 @@
 # SwiftLot
 
-A full-stack auction intelligence platform built to give buyers a real edge at salvage vehicle auctions. It reverse-engineers the Autura Marketplace API to automatically discover active auctions across all regions nationwide, scrapes full vehicle listings, and enriches every Texas vehicle with real odometer history pulled from the state inspection database. The entire pipeline is event-driven — new auctions and vehicles are detected and scraped the moment they appear in Firebase.
+A full-stack auction intelligence platform built to give buyers a real edge at salvage vehicle auctions. It reverse-engineers the Autura Marketplace API to discover active auctions nationwide, scrapes full vehicle listings in a single feed pass, and enriches every Texas vehicle with real odometer history pulled from the state inspection database.
 
 Built for the first-time auction buyer who walks in blind and leaves with a bad deal, and turns that experience into something data-driven and repeatable.
 
@@ -8,43 +8,43 @@ Live at [swift-lot.com](https://swift-lot.com)
 
 ## Features
 
-- **Real-time bid streaming** — backend subscribes to Firebase RTDB via SSE at the region level (2 threads per region); bid updates propagate to the frontend the instant they happen, no polling
-- **Instant auction lifecycle detection** — detects `ended: true` from Firebase the moment an auction closes and runs harvest immediately, capturing final sale prices within seconds
-- **LIVE badge** — auctions show a live indicator when a vehicle is actively on the block
-- **Fully event-driven pipeline** — new auctions detected via RTDB stream trigger discovery + scrape automatically; new vehicles added mid-auction trigger a rescrape; zero-vehicle auctions are retried every 15 minutes via a DB-column-based retry queue
-- Discovers active auctions across all active regions nationwide (no hardcoded state list)
-- Fetches full vehicle details: VIN, year, make, model, color, condition, images, current bid
+- **Real-time bid streaming** — backend subscribes to Autura's Ably WebSocket feed per vehicle lot; `NEW_BID` events carry the bid amount directly, so updates reach the frontend with zero extra HTTP calls. Subscriptions are lazy (subscribe only while someone's actually watching, unsubscribe when the last viewer leaves) since Autura's Ably connection caps out around 200 concurrent channels
+- **Single-pass feed scrape** — one paginated crawl of `mp.autura.com/auctions.data` returns vehicle details, bidding info, and seller info together; no per-auction or per-vehicle follow-up calls needed
+- **VIN-based lifecycle tracking** — a vehicle whose VIN drops out of the active feed is harvested (final sale price captured) and removed outright, instead of being flagged and left to accumulate
+- Discovers active auctions across all active sellers nationwide (no hardcoded state list)
 - Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then batch-fetches odometer history for every VIN via authenticated HTTP
 - Captures final sale prices from completed auctions and surfaces historical average sale prices per year/make/model
-- Firebase Auth — per-user garage (saved vehicles with auction snapshots) and saved auctions
-- Garage snapshots preserve final bid prices after an auction closes so saved vehicles are never lost
+- Firebase Auth — per-user garage (saved vehicles) and saved auctions (saved sellers)
+- Garage snapshots preserve a vehicle's last-known data after it sells or is pulled, so saved vehicles are never lost
 - Filterable UI by year range, make, model, start status, engine, drivetrain, odometer range
 
 ## Stack
 
-- **Backend** — Python, FastAPI, Playwright, curl_cffi, PostgreSQL
+- **Backend** — Python, FastAPI, Playwright, curl_cffi, PostgreSQL (Neon)
 - **Frontend** — React 19, Vite, React Router
 - **Auth** — Firebase Authentication
-- **Realtime** — Firebase RTDB (SSE), FastAPI StreamingResponse
-- **Infra** — Hetzner (backend + nginx), Cloudflare Pages (frontend), Cloudflare DNS/CDN
+- **Realtime** — Ably WebSocket (Autura's feed) in, FastAPI SSE (`StreamingResponse`) out
+- **Infra** — Hetzner (backend + systemd), Cloudflare Pages (frontend), Cloudflare DNS/CDN
 
 ## Project Structure
 
 ```
 backend/
-  main.py               # FastAPI app entry point
-  config.py             # Environment config (.env loader)
-  db.py                 # PostgreSQL connection pool and query helpers
-  models.py             # Pydantic response models
-  state.py              # Shared in-memory job status tracking (admin endpoints)
-  autura_api.py         # Autura Marketplace API client (auth + Cloud Run calls)
-  auction_scraper.py    # Fetches vehicles per auction via API
-  auction_discovery.py  # Discovers active auctions across all regions via API
-  inspection_scraper.py # Playwright session + HTTP batch fetch for TX odometer history
-  historical_harvester.py # Captures final sale prices from completed auctions
-  routes.py             # All API route handlers (includes SSE /stream/auction/:id)
-  rtdb_listener.py      # Firebase RTDB SSE listener — real-time bid + lifecycle updates,
-                        #   event-driven scrape triggers, watchdog, retry checker
+  main.py                      # FastAPI app entry point, startup scrape + scheduler threads
+  config.py                    # Environment config (.env loader)
+  db.py                        # PostgreSQL connection pool, schema init/migration
+  models.py                    # Pydantic response models
+  auth.py                      # Firebase ID token verification
+  routes.py                    # All API route handlers (incl. SSE /stream endpoints)
+  import_historical.py         # One-off: load historical_sales.csv into Postgres
+  test_inspection.py           # Manual test script for the inspection scraper
+  scrapers/autura/
+    autura_api.py              # HTTP client — login, turbo-stream decoding, feed/seller pagination
+    feed_scraper.py            # Single-pass feed scrape: upserts vehicles + sellers,
+                                #   detects ended vehicles (VIN diff), harvests sold prices
+    auction_listener.py        # Ably subscriptions (lazy, per-vehicle), SSE broadcast,
+                                #   watchdog resync against connected clients
+    inspection_scraper.py       # Playwright session + HTTP batch fetch for TX odometer history
 
 frontend/
   src/
@@ -52,10 +52,12 @@ frontend/
     api.js                         # API base URL (env-aware)
     AuthContext.jsx                 # Firebase auth context
     pages/
-      AuctionsPage.jsx             # /auctions — auction card grid grouped by state (LIVE badge)
+      HomePage.jsx                 # / — rotating vehicle carousel
+      AuctionsPage.jsx             # /auctions — seller card grid
       AuctionDetailPage.jsx        # /auctions/:id — vehicle table with live bid updates
+      SearchPage.jsx               # /search — full live inventory with filters
       WatchlistPage.jsx            # /watchlist — saved vehicles with live bid streaming
-      SavedAuctionsPage.jsx        # /saved — saved auctions
+      SavedAuctionsPage.jsx        # /saved — saved sellers
       LoginPage.jsx                # /login
       AboutPage.jsx                # /about
     components/
@@ -63,6 +65,15 @@ frontend/
       ChecklistFilter.jsx
       ImageCycler.jsx
 ```
+
+## Data model
+
+"Auction" in the UI means a seller's sale event, but Autura's own `auction_id` is per-vehicle lot (each listing gets its own id and closing time, staggered seconds apart in a run). So:
+
+- **`sellers`** — static-ish metadata per seller (name, city, state, region_id). No status or bidding fields.
+- **`vehicles`** — one row per VIN, carrying its own `auction_id`, `current_bid`, `bid_expiration`. This is the source of truth for what's live; `vehicles_count` and `closes_at` shown per seller are computed live by aggregating this table, not stored separately.
+- **`historical_sales`** — final sale prices, independent of whether the vehicle row still exists.
+- **`garage`** / **`saved_auctions`** — per-user saved vehicles/sellers; garage keeps its own copy of a vehicle's last-known fields so a saved vehicle still displays after it's gone from `vehicles`.
 
 ## Local Setup
 
@@ -100,6 +111,7 @@ python main.py
 - API: `http://127.0.0.1:8000`
 - Swagger docs: `http://127.0.0.1:8000/docs`
 - Hot reload is enabled — no restart needed on code changes
+- On startup it runs a full feed scrape in the background, plus a periodic rescrape every 2 hours and a weekly sold-listing sweep
 
 ### Frontend
 
@@ -114,27 +126,26 @@ App at `http://localhost:5173`
 ## API Endpoints
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/auctions` | All active auctions |
-| GET | `/api/v1/auctions/:id` | Single auction |
-| GET | `/api/v1/auctions/:id/vehicles` | Vehicles for a specific auction |
-| GET | `/api/v1/historical/stats` | Avg sale price by make/model/year |
-| GET | `/api/v1/historical/search` | Search historical sales |
+|--------|----------|--------------|
+| GET | `/api/v1/auctions` | All sellers with at least one live vehicle |
+| GET | `/api/v1/auctions/:region_id` | Single seller summary |
+| GET | `/api/v1/auctions/:region_id/vehicles` | Live vehicles for a seller |
+| GET | `/api/v1/vehicles` | Search live inventory (make/model/year/region filters) |
 | GET | `/api/v1/vehicles/:vin/history` | Sale history for a VIN |
 | GET | `/api/v1/vehicles/:vin/odometer` | Odometer history for a VIN |
+| GET | `/api/v1/historical/stats` | Avg sale price by make/model/year |
+| POST | `/api/v1/historical/stats/batch` | Avg sale price for multiple make/model/year combos |
+| GET | `/api/v1/historical/search` | Search historical sales |
 | GET | `/api/v1/garage` | Saved vehicles (auth required) |
 | POST | `/api/v1/garage/:vin` | Add vehicle to garage (auth required) |
 | DELETE | `/api/v1/garage/:vin` | Remove vehicle from garage (auth required) |
-| GET | `/api/v1/saved-auctions` | Saved auctions (auth required) |
-| POST | `/api/v1/saved-auctions/:id` | Save an auction (auth required) |
-| DELETE | `/api/v1/saved-auctions/:id` | Remove saved auction (auth required) |
-| GET | `/api/v1/stream/auction/:id` | SSE stream of live bid updates for an auction |
-| GET | `/api/v1/stream/multi?auctions=id1,id2` | Single SSE connection for multiple auctions (garage page) |
-| GET | `/api/v1/health` | Listener health — active subscriptions and dead threads |
-| POST | `/api/v1/discovery/run` | Run auction discovery (admin only) |
-| POST | `/api/v1/scrape/:id` | Manually trigger auction scrape (admin only) |
-| POST | `/api/v1/inspectionscrape/:vin` | Manually trigger TX inspection for a VIN (admin only) |
-| POST | `/api/v1/pipeline/run` | Run full discovery pass (admin only) |
+| GET | `/api/v1/saved-auctions` | Saved sellers (auth required) |
+| GET | `/api/v1/saved-auctions/check/:region_id` | Whether a seller is saved (auth required) |
+| POST | `/api/v1/saved-auctions/:region_id` | Save a seller (auth required) |
+| DELETE | `/api/v1/saved-auctions/:region_id` | Remove a saved seller (auth required) |
+| GET | `/api/v1/stream/auction/:auction_id` | SSE stream of live bid updates for one vehicle lot |
+| GET | `/api/v1/stream/multi?auctions=id1,id2` | Single SSE connection for multiple vehicle lots (watchlist/detail pages) |
+| GET | `/api/v1/health` | Ably connection state, active SSE clients, live subscriptions |
 
 ## Deployment
 
@@ -146,4 +157,5 @@ App at `http://localhost:5173`
 
 - Inspection scraper uses Playwright with `headless=False` to bypass Cloudflare Turnstile on mytxcar.org, then reuses the acquired session for all subsequent VIN lookups via HTTP
 - The systemd service uses `xvfb-run --auto-servernum` — no manual Xvfb setup needed
-- RTDB listener subscribes at the region level (2 threads per region) rather than per-auction, keeping thread count bounded regardless of how many auctions are active
+- Ably's `auth_url` requires the same session cookies as the scraping client (Autura gates `/ably-auth`), so the realtime client forwards them explicitly — a fresh/unauthenticated request to `auth_url` gets a 403
+- Sold-listing harvest runs sequentially, deliberately not parallelized — Neon's serverless Postgres drops connections under a burst of concurrent new ones
