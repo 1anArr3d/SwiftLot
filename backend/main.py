@@ -22,11 +22,11 @@ async def lifespan(app: FastAPI):
     init_db()
     listener.set_event_loop(asyncio.get_running_loop())
 
-    # Initial full scrape + subscribe
+    # Initial full scrape. Ably subscriptions are lazy (subscribe-on-view) —
+    # nothing to resubscribe at cold start since there are no SSE clients yet.
     def _startup():
-        listener.sync_with_db()  # cold-start bootstrap: resubscribe from last-known DB state
         try:
-            scraper.scrape_all()  # reconciles subscriptions itself via listener.reconcile()
+            scraper.scrape_all()
         except Exception as e:
             print(f"[autura] Startup scrape failed: {e}")
         try:
