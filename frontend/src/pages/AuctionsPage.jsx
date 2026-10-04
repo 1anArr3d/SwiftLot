@@ -68,6 +68,7 @@ function AuctionCard({ card, onClick }) {
 const AuctionsPage = () => {
   const [auctionList, setAuctionList] = useState([]);
   const [loading, setLoading]         = useState(true);
+  const [loadFailed, setLoadFailed]   = useState(false);
   const navigate = useNavigate();
 
   // — Carousel refs —
@@ -182,23 +183,43 @@ const AuctionsPage = () => {
     if (pool.current.length) tryInit(pool.current);
   };
 
-  // Fetch auctions
+  // Fetch auctions. A failed/non-ok response retries once after a short delay
+  // instead of silently rendering as "No active auctions" — indistinguishable
+  // from a real empty result, which is what made transient backend hiccups
+  // look like the site was broken until a manual refresh.
   useEffect(() => {
-    fetch(`${API}/auctions`)
-      .then(r => r.json())
-      .then(data => {
-        const sanitized = data.map(sanitize);
-        setAuctionList(sanitized);
-        const soonest = [...sanitized]
-          .filter(c => c.closes_at)
-          .sort((a, b) => new Date(a.closes_at) - new Date(b.closes_at));
-        tryInit(soonest);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    const load = (isRetry = false) => {
+      fetch(`${API}/auctions`)
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(data => {
+          if (cancelled) return;
+          const sanitized = data.map(sanitize);
+          setAuctionList(sanitized);
+          setLoadFailed(false);
+          setLoading(false);
+          const soonest = [...sanitized]
+            .filter(c => c.closes_at)
+            .sort((a, b) => new Date(a.closes_at) - new Date(b.closes_at));
+          tryInit(soonest);
+        })
+        .catch(err => {
+          console.error(err);
+          if (cancelled) return;
+          if (!isRetry) {
+            setTimeout(() => load(true), 2000);
+          } else {
+            setLoadFailed(true);
+            setLoading(false);
+          }
+        });
+    };
+    load();
+    return () => { cancelled = true; };
   }, []);
 
   if (loading) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>Loading auctions…</div>;
+  if (loadFailed) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>Couldn't load auctions — check your connection and refresh.</div>;
   if (!auctionList.length) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>No active auctions.</div>;
 
   const stateGroups = groupByState(auctionList);
