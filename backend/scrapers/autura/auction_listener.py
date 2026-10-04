@@ -42,9 +42,25 @@ def health() -> dict:
     return {
         "subscribed_auctions": list(_subscriptions.keys()),
         "active_clients":      {aid: len(qs) for aid, qs in _clients.items() if qs},
-        "ably_connected":      _ably is not None,
+        "ably_connected":      _ably is not None and str(_ably.connection.state) == "ConnectionState.CONNECTED",
+        "ably_connection_state": str(_ably.connection.state) if _ably else None,
         "timestamp":           datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _ably_auth_headers() -> dict:
+    """
+    ably-auth is session-gated on Autura's side — the Ably SDK's own request to
+    auth_url doesn't carry our scraping session's cookies unless forwarded
+    explicitly, so without this every subscribe silently fails auth (connection
+    goes to FAILED, never raises anywhere visible). Captured once per process;
+    if the Autura session rotates (~monthly) while this process stays up, this
+    goes stale and needs a restart — acceptable for now, not auto-refreshed.
+    """
+    from .autura_api import _get_session
+    sess = _get_session()
+    cookie_str = "; ".join(f"{k}={v}" for k, v in dict(sess.cookies).items())
+    return {"Cookie": cookie_str}
 
 
 def _channel_name(auction_id: str) -> str:
@@ -104,7 +120,7 @@ async def _on_update(auction_id: str, message):
 async def _subscribe_async(auction_id: str):
     global _ably
     if _ably is None:
-        _ably = AblyRealtime(auth_url=ABLY_AUTH_URL)
+        _ably = AblyRealtime(auth_url=ABLY_AUTH_URL, auth_headers=_ably_auth_headers())
     ch = _ably.channels.get(_channel_name(auction_id))
     await ch.subscribe(lambda msg: asyncio.ensure_future(_on_update(auction_id, msg)))
     with _lock:
@@ -115,7 +131,13 @@ async def _subscribe_async(auction_id: str):
 def subscribe_auction(auction_id: str):
     if auction_id in _subscriptions or not _event_loop:
         return
-    asyncio.run_coroutine_threadsafe(_subscribe_async(auction_id), _event_loop)
+    future = asyncio.run_coroutine_threadsafe(_subscribe_async(auction_id), _event_loop)
+    # run_coroutine_threadsafe swallows exceptions unless the future is checked —
+    # this is exactly how the ably-auth 403 (session cookies not forwarded) went
+    # unnoticed: every subscribe failed silently, health() still looked "connected".
+    future.add_done_callback(
+        lambda f: f.exception() and logger.error("Subscribe failed for auction %s: %s", auction_id, f.exception())
+    )
 
 
 async def _unsubscribe_async(auction_id: str):
