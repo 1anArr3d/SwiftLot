@@ -11,7 +11,6 @@ class Auction(BaseModel):
     auction_status: Optional[str] = None
     vehicles_listed: Optional[int] = None
     last_discovered: Optional[str] = None
-    ended_at: Optional[str] = None
     closes_at: Optional[str] = None
 
 

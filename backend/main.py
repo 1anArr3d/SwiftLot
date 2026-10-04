@@ -34,8 +34,8 @@ async def lifespan(app: FastAPI):
             from db import query
             rows = query(
                 "SELECT v.vin FROM vehicles v "
-                "JOIN auctions a ON a.auction_id = v.auction_id "
-                "WHERE (v.last_recorded_odo IS NULL OR v.last_recorded_odo = 'N/A') AND a.seller_state = 'TX'"
+                "JOIN sellers s ON s.region_id = v.region_id "
+                "WHERE (v.last_recorded_odo IS NULL OR v.last_recorded_odo = 'N/A') AND s.seller_state = 'TX'"
             )
             vins = [r["vin"] for r in rows]
             if vins:

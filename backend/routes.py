@@ -21,20 +21,24 @@ def get_health():
 
 @router.get("/auctions", tags=["auctions"])
 def get_auctions():
+    # "Auction" in the UI means seller/sale event. Autura's real auction_id is
+    # per-vehicle (each lot has its own closing time), so vehicles_count and
+    # closes_at are computed live from vehicles rather than stored separately —
+    # a seller with zero live vehicles just drops out of the JOIN.
     rows = query("""
         SELECT
-            region_id                               AS id,
-            region_id,
-            'autura'                                AS source,
-            MAX(seller_name)                        AS name,
-            MAX(seller_city)                        AS city,
-            MAX(seller_state)                       AS state,
-            SUM(COALESCE(vehicles_listed, 0))       AS vehicles_count,
-            MIN(closes_at)                          AS closes_at
-        FROM auctions
-        WHERE source = 'autura'
-          AND auction_status != 'completed'
-        GROUP BY region_id
+            s.region_id                AS id,
+            s.region_id,
+            'autura'                   AS source,
+            s.seller_name              AS name,
+            s.seller_city              AS city,
+            s.seller_state             AS state,
+            COUNT(v.vin)               AS vehicles_count,
+            MIN(v.bid_expiration)      AS closes_at
+        FROM sellers s
+        JOIN vehicles v ON v.region_id = s.region_id
+        WHERE s.source = 'autura'
+        GROUP BY s.region_id, s.seller_name, s.seller_city, s.seller_state
         ORDER BY closes_at NULLS LAST
     """)
     return [dict(row) for row in rows]
@@ -43,18 +47,19 @@ def get_auctions():
 @router.get("/auctions/{auction_id}", response_model=Auction, tags=["auctions"])
 def get_auction(auction_id: str):
     row = query("""
-        SELECT region_id          AS auction_id,
-               region_id,
-               MAX(seller_name)   AS seller_name,
-               'PRE_BID'          AS auction_status,
-               MAX(closes_at)     AS closes_at,
-               MAX(last_discovered) AS last_discovered,
-               MAX(seller_city)   AS seller_city,
-               MAX(seller_state)  AS seller_state,
-               SUM(COALESCE(vehicles_listed, 0)) AS vehicles_listed
-        FROM auctions
-        WHERE region_id = %s AND source = 'autura'
-        GROUP BY region_id
+        SELECT s.region_id            AS auction_id,
+               s.region_id,
+               s.seller_name          AS seller_name,
+               'ACTIVE'                AS auction_status,
+               MIN(v.bid_expiration)  AS closes_at,
+               s.last_discovered,
+               s.seller_city,
+               s.seller_state,
+               COUNT(v.vin)           AS vehicles_listed
+        FROM sellers s
+        LEFT JOIN vehicles v ON v.region_id = s.region_id
+        WHERE s.region_id = %s AND s.source = 'autura'
+        GROUP BY s.region_id, s.seller_name, s.last_discovered, s.seller_city, s.seller_state
     """, (auction_id,), one=True)
     if not row:
         raise HTTPException(status_code=404, detail="Auction not found")
@@ -63,14 +68,10 @@ def get_auction(auction_id: str):
 
 @router.get("/auctions/{auction_id}/vehicles", response_model=list[Vehicle], tags=["auctions"])
 def get_auction_vehicles(auction_id: str, limit: int = 1000, offset: int = 0):
+    # Ended vehicles are deleted from the table on scrape, so no status filter needed.
     rows = query(
         """SELECT v.* FROM vehicles v
            WHERE v.region_id = %s
-             AND NOT EXISTS (
-                 SELECT 1 FROM auctions a
-                 WHERE a.auction_id = v.auction_id
-                   AND a.auction_status = 'completed'
-             )
            ORDER BY v.make, v.model, v.year LIMIT %s OFFSET %s""",
         (auction_id, limit, offset)
     )
@@ -88,13 +89,8 @@ def search_vehicles(
     region_id: str = None,
     limit: int = None,
 ):
-    filters, args = [
-        "v.make NOT IN ('OTHER', 'OTHER-NOT FOUND') AND v.year IS NOT NULL AND v.year < 9000",
-        """NOT EXISTS (
-            SELECT 1 FROM auctions a
-            WHERE a.auction_id = v.auction_id AND a.auction_status = 'completed'
-        )""",
-    ], []
+    # Ended vehicles are deleted from the table on scrape, so no status filter needed.
+    filters, args = ["v.make NOT IN ('OTHER', 'OTHER-NOT FOUND') AND v.year IS NOT NULL AND v.year < 9000"], []
     if make:
         filters.append("UPPER(make) = UPPER(%s)")
         args.append(make)
@@ -113,9 +109,9 @@ def search_vehicles(
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
     limit_clause = f"LIMIT {int(limit)}" if limit else ""
     rows = query(
-        f"""SELECT v.*, a.seller_name, a.closes_at
+        f"""SELECT v.*, s.seller_name, v.bid_expiration AS closes_at
             FROM vehicles v
-            LEFT JOIN auctions a ON v.auction_id = a.auction_id
+            LEFT JOIN sellers s ON v.region_id = s.region_id
             {where} ORDER BY v.year DESC, v.make, v.model {limit_clause}""",
         tuple(args),
     )
@@ -316,12 +312,13 @@ def get_saved_auctions(user_id: str = Depends(get_current_user)):
                MAX(a.seller_name) AS seller_name,
                MAX(a.seller_city) AS seller_city,
                MAX(a.seller_state) AS seller_state,
-               'PRE_BID' AS auction_status,
-               SUM(COALESCE(a.vehicles_listed, 0)) AS vehicles_listed,
-               MIN(a.closes_at) AS closes_at,
+               'ACTIVE' AS auction_status,
+               COUNT(v.vin) AS vehicles_listed,
+               MIN(v.bid_expiration) AS closes_at,
                s.saved_at
         FROM saved_auctions s
-        JOIN auctions a ON s.auction_id = a.region_id
+        JOIN sellers a ON s.auction_id = a.region_id
+        LEFT JOIN vehicles v ON v.region_id = a.region_id
         WHERE s.user_id = %s
         GROUP BY s.auction_id, s.saved_at
         ORDER BY s.saved_at DESC
@@ -337,7 +334,7 @@ def check_saved_auction(region_id: str, user_id: str = Depends(get_current_user)
 
 @router.post("/saved-auctions/{region_id}", tags=["saved-auctions"])
 def save_auction(region_id: str, user_id: str = Depends(get_current_user)):
-    auction = query("SELECT 1 FROM auctions WHERE region_id = %s LIMIT 1", (region_id,), one=True)
+    auction = query("SELECT 1 FROM sellers WHERE region_id = %s LIMIT 1", (region_id,), one=True)
     if not auction:
         raise HTTPException(status_code=404, detail="Auction not found")
     with get_db() as conn:
@@ -375,10 +372,10 @@ async def stream_multi_auctions(request: Request, auctions: str = ""):
         return StreamingResponse(_empty(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    placeholders = ",".join(["%s"] * len(auction_ids))
+    # Existence in vehicles IS the "active" signal — ended vehicles are deleted on scrape.
     active_rows = query(
-        f"SELECT auction_id FROM auctions WHERE auction_id IN ({placeholders}) AND auction_status != 'completed'",
-        tuple(auction_ids)
+        "SELECT DISTINCT auction_id FROM vehicles WHERE auction_id = ANY(%s)",
+        (auction_ids,)
     )
     active_ids = [r["auction_id"] for r in active_rows]
 
@@ -439,11 +436,11 @@ async def stream_auction_updates(auction_id: str):
     Emits: {"type":"ended","auction_id":..}
     """
     async def event_gen():
-        auction = query(
-            "SELECT auction_status FROM auctions WHERE auction_id = %s",
+        still_active = query(
+            "SELECT 1 FROM vehicles WHERE auction_id = %s LIMIT 1",
             (auction_id,), one=True
         )
-        if auction and auction["auction_status"] == "completed":
+        if not still_active:
             yield f"data: {json.dumps({'type': 'ended', 'auction_id': auction_id})}\n\n"
             return
 

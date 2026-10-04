@@ -85,22 +85,17 @@ def _listing_to_vehicle_row(listing: dict) -> dict:
     }
 
 
-def _listing_to_auction_record(listing: dict) -> dict | None:
-    bidding = listing.get("biddingInfo") or {}
-    info    = bidding.get("auctionInfo") or {}
-    auction_id = info.get("auctionId") or listing.get("accountId")
-    if not auction_id:
+def _listing_to_seller_record(listing: dict) -> dict | None:
+    region_id = listing.get("accountId")
+    if not region_id:
         return None
 
     seller = listing.get("sellerInfo") or {}
     disc   = listing.get("sellerDisclosure") or {}
 
     return {
-        "auction_id":     auction_id,
-        "region_id":      listing.get("accountId"),
+        "region_id":      region_id,
         "seller_name":    seller.get("sellerName"),
-        "auction_status": bidding.get("biddingStatus") or "PRE_BID",
-        "closes_at":      info.get("biddingEndUtc"),
         "last_discovered":datetime.now(timezone.utc).isoformat(),
         "seller_city":    seller.get("city") or disc.get("city"),
         "seller_state":   seller.get("state") or disc.get("state"),
@@ -149,24 +144,20 @@ def _upsert_vehicle(conn, listing: dict):
     )
 
 
-def _upsert_auction(conn, record: dict):
+def _upsert_seller(conn, record: dict):
     conn.execute(
         """
-        INSERT INTO auctions
-            (auction_id, region_id, seller_name, auction_status, closes_at,
-             last_discovered, seller_city, seller_state, source)
+        INSERT INTO sellers
+            (region_id, seller_name, last_discovered, seller_city, seller_state, source)
         VALUES
-            (%(auction_id)s, %(region_id)s, %(seller_name)s,
-             %(auction_status)s, %(closes_at)s, %(last_discovered)s,
+            (%(region_id)s, %(seller_name)s, %(last_discovered)s,
              %(seller_city)s, %(seller_state)s, %(source)s)
-        ON CONFLICT (auction_id) DO UPDATE SET
-            auction_status  = EXCLUDED.auction_status,
-            closes_at       = EXCLUDED.closes_at,
+        ON CONFLICT (region_id) DO UPDATE SET
             last_discovered = EXCLUDED.last_discovered,
-            seller_name     = COALESCE(EXCLUDED.seller_name, auctions.seller_name),
-            seller_city     = COALESCE(EXCLUDED.seller_city, auctions.seller_city),
-            seller_state    = COALESCE(EXCLUDED.seller_state, auctions.seller_state),
-            source          = COALESCE(EXCLUDED.source, auctions.source)
+            seller_name     = COALESCE(EXCLUDED.seller_name, sellers.seller_name),
+            seller_city     = COALESCE(EXCLUDED.seller_city, sellers.seller_city),
+            seller_state    = COALESCE(EXCLUDED.seller_state, sellers.seller_state),
+            source          = COALESCE(EXCLUDED.source, sellers.source)
         """,
         record,
     )
@@ -223,13 +214,19 @@ def _insert_sold(conn, listing: dict):
 def run_full_feed() -> dict:
     """
     Full single-pass feed scrape. Fetches listings for every seller and upserts
-    vehicles, auctions, and historical_sales in one DB pass.
-    Also detects ended auctions and runs inspection queuing.
+    vehicles, sellers, and historical_sales in one DB pass.
+    Also detects ended vehicles (sold or pulled) and runs inspection queuing.
+
+    Autura's auction_id is per-vehicle, not per-seller (each lot gets its own
+    id and closing time, staggered ~15s apart in a run). The VIN is the only
+    stable identity across scrapes, so ended-vehicle detection diffs on VIN,
+    not auction_id.
     """
     all_active, all_sold = get_all_feed()
 
-    seen_auctions: set[str] = set()
-    active_ids:    set[str] = set()
+    seen_sellers: set[str] = set()
+    active_ids:   set[str] = set()   # per-vehicle auction_ids (Ably channels)
+    active_vins:  set[str] = set()
 
     print(f"[feed] {len(all_active)} active, {len(all_sold)} sold listings fetched")
     CHUNK = 100
@@ -237,145 +234,112 @@ def run_full_feed() -> dict:
         chunk = all_active[i:i + CHUNK]
         with get_db() as conn:
             for listing in chunk:
+                vin = (listing.get("unitDetails") or {}).get("vin")
+                if vin:
+                    active_vins.add(vin)
                 _upsert_vehicle(conn, listing)
-                record = _listing_to_auction_record(listing)
+
+                record = _listing_to_seller_record(listing)
                 if record:
-                    aid = record["auction_id"]
+                    rid = record["region_id"]
+                    if rid not in seen_sellers:
+                        seen_sellers.add(rid)
+                        _upsert_seller(conn, record)
+
+                bidding = listing.get("biddingInfo") or {}
+                aid = (bidding.get("auctionInfo") or {}).get("auctionId")
+                if aid:
                     active_ids.add(aid)
-                    if aid not in seen_auctions:
-                        seen_auctions.add(aid)
-                        _upsert_auction(conn, record)
         print(f"[feed] {min(i + CHUNK, len(all_active))}/{len(all_active)} vehicles written")
 
     with get_db() as conn:
         for listing in all_sold:
             _insert_sold(conn, listing)
-        conn.execute("""
-            UPDATE auctions a
-            SET vehicles_listed = (
-                SELECT COUNT(*) FROM vehicles v WHERE v.auction_id = a.auction_id
-            )
-        """)
 
-    _handle_ended_auctions(active_ids, all_sold)
+    _handle_ended_vehicles(active_vins)
 
     from scrapers.autura import auction_listener as listener
     listener.reconcile(active_ids)
 
-    print(f"[feed] Done: {len(all_active)} vehicles, {len(seen_auctions)} auctions, {len(all_sold)} sold")
-    return {"vehicles": len(all_active), "auctions": len(seen_auctions), "sold": len(all_sold)}
+    print(f"[feed] Done: {len(all_active)} vehicles, {len(seen_sellers)} sellers, {len(all_sold)} sold")
+    return {"vehicles": len(all_active), "sellers": len(seen_sellers), "sold": len(all_sold)}
 
 
 # Alias for callers that still use scrape_all()
 scrape_all = run_full_feed
 
 
+def _harvest_sold_for_sellers(seller_ids: list[str]) -> dict:
+    """
+    Fetch + insert sold listings for the given sellers via get_seller_listings()
+    (sold listings are only visible via ?seller= filter, not the global feed).
+    Shared by the immediate per-ended-seller harvest in _handle_ended_vehicles()
+    and the periodic full-sweep run_sold_backfill() — same job, same code path,
+    just different scope and trigger.
+    """
+    inserted = errors = 0
+    for seller_id in seller_ids:
+        try:
+            _, sold = get_seller_listings(seller_id)
+            with get_db() as conn:
+                for listing in sold:
+                    _insert_sold(conn, listing)
+                    inserted += 1
+        except Exception as e:
+            errors += 1
+            print(f"[sold-harvest] Fetch failed for seller {seller_id}: {e}")
+    return {"inserted": inserted, "errors": errors}
+
+
 def run_sold_backfill() -> dict:
     """
     Walk every seller and collect their sold listings into historical_sales.
-    Sold listings are only visible via ?seller= filter, not the global feed.
-    Runs independently of the main feed scrape; safe to call weekly.
+    Runs independently of the main feed scrape, in its own thread; safe to
+    call periodically as a catch-all for anything the immediate per-ended-seller
+    harvest missed.
     """
     sellers = get_all_sellers()
     print(f"[sold-backfill] {len(sellers)} sellers to check")
-    inserted = skipped = errors = 0
-
-    for s in sellers:
-        try:
-            _, sold = get_seller_listings(s["accountId"])
-            if not sold:
-                continue
-            with get_db() as conn:
-                for listing in sold:
-                    details = listing.get("unitDetails") or {}
-                    bidding = listing.get("biddingInfo") or {}
-                    info    = bidding.get("auctionInfo") or {}
-                    winning = bidding.get("winningBid") or {}
-                    vin        = details.get("vin")
-                    auction_id = info.get("auctionId")
-                    sale_cents = winning.get("amountCents")
-                    if not vin or not auction_id or sale_cents is None:
-                        skipped += 1
-                        continue
-                    year_raw = details.get("year")
-                    try:
-                        year = int(year_raw) if year_raw else None
-                    except (ValueError, TypeError):
-                        year = None
-                    conn.execute(
-                        """
-                        INSERT INTO historical_sales
-                            (vin, year, make, model, color, key_status,
-                             region_id, auction_id, final_sale, fees_total, sold_at, source)
-                        VALUES
-                            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (vin, auction_id) DO NOTHING
-                        """,
-                        (vin, year, details.get("make"), details.get("model"),
-                         details.get("color"), details.get("keys"),
-                         s["accountId"], auction_id, sale_cents / 100, None,
-                         listing.get("updatedAt"), "autura_mp"),
-                    )
-                    inserted += 1
-        except Exception:
-            errors += 1
-            print(f"[sold-backfill] Error on seller {s['accountName']}")
-
-    print(f"[sold-backfill] Done: {inserted} inserted, {skipped} skipped, {errors} errors")
-    return {"inserted": inserted, "skipped": skipped, "errors": errors}
+    result = _harvest_sold_for_sellers([s["accountId"] for s in sellers])
+    print(f"[sold-backfill] Done: {result['inserted']} inserted, {result['errors']} seller error(s)")
+    return result
 
 
 # ── Support functions ─────────────────────────────────────────────────────────
 
-def _handle_ended_auctions(active_ids: set[str], sold_listings: list[dict]):
+def _handle_ended_vehicles(active_vins: set[str]):
+    """
+    A vehicle whose VIN no longer appears in the active feed has either sold
+    or been pulled. Fetch final sold data for its seller (the global feed's
+    soldUnitListings doesn't always carry every just-ended vehicle), broadcast
+    "ended" + unsubscribe its Ably channel, then drop the row — vehicles has
+    no separate "completed" flag that can drift out of sync with reality.
+    """
     from scrapers.autura import auction_listener as listener
 
-    open_rows = query(
-        "SELECT auction_id, region_id FROM auctions WHERE auction_status NOT IN ('completed', 'ENDED') AND source = 'autura'"
+    gone = query(
+        "SELECT vin, auction_id, region_id FROM vehicles WHERE NOT (vin = ANY(%s))",
+        (list(active_vins),),
     )
-    ended_rows = [r for r in open_rows if r["auction_id"] not in active_ids]
-    if not ended_rows:
+    if not gone:
         return
 
-    ended = [r["auction_id"] for r in ended_rows]
-    ended_set = set(ended)
-    relevant_sold = [
-        l for l in sold_listings
-        if (l.get("biddingInfo") or {}).get("auctionInfo", {}).get("auctionId") in ended_set
-    ]
+    print(f"[feed] {len(gone)} vehicle(s) no longer in feed — harvesting + removing")
+
+    seller_ids = list({r["region_id"] for r in gone if r["region_id"]})
+    if seller_ids:
+        result = _harvest_sold_for_sellers(seller_ids)
+        print(f"[feed] Sold harvest: {result['inserted']} listing(s) for {len(seller_ids)} affected seller(s)")
 
     with get_db() as conn:
-        for listing in relevant_sold:
-            _insert_sold(conn, listing)
-        for auction_id in ended:
-            conn.execute(
-                "UPDATE auctions SET auction_status = 'completed', ended_at = NOW() WHERE auction_id = %s",
-                (auction_id,),
-            )
+        for row in gone:
+            conn.execute("DELETE FROM vehicles WHERE vin = %s", (row["vin"],))
 
-    for auction_id in ended:
-        listener._broadcast(auction_id, {"type": "ended"})
-        # TRACKED ISSUE: listener.unsubscribe_auction() is never called here (or anywhere).
-        # Ended auctions get their "completed" DB status and an SSE "ended" broadcast, but
-        # the Ably channel subscription is left open indefinitely. Not fixed here — see
-        # docs/architecture.md "Known issues".
+    for row in gone:
+        if row["auction_id"]:
+            listener._broadcast(row["auction_id"], {"type": "ended"})
+            listener.unsubscribe_auction(row["auction_id"])
 
-    print(f"[feed] Closed {len(ended)} ended auction(s): {ended}")
-
-    # Fetch sold listings from each ended seller immediately while data is still available
-    seller_ids = list({r["region_id"] for r in ended_rows if r["region_id"]})
-    if seller_ids:
-        print(f"[feed] Fetching sold data for {len(seller_ids)} ended seller(s)...")
-        inserted = 0
-        for seller_id in seller_ids:
-            try:
-                _, sold = get_seller_listings(seller_id)
-                with get_db() as conn:
-                    for listing in sold:
-                        _insert_sold(conn, listing)
-                        inserted += 1
-            except Exception as e:
-                print(f"[feed] Sold fetch failed for seller {seller_id}: {e}")
-        print(f"[feed] Sold backfill: {inserted} listing(s) captured")
+    print(f"[feed] Removed {len(gone)} ended vehicle(s)")
 
 

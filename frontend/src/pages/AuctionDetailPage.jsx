@@ -52,14 +52,17 @@ const AuctionDetailPage = () => {
     }
   }, [id, token]);
 
+  // Real-time updates key off each vehicle's own auction_id (one per lot,
+  // not per seller) — region_id (id) is not a valid Ably channel id.
+  const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');
   useEffect(() => {
-    if (!id) return;
+    if (!auctionIdKey) return;
     setLiveBids({});
     let stopped = false;
     let source;
     const connect = () => {
       if (stopped) return;
-      source = new EventSource(`${API}/stream/multi?auctions=${id}`);
+      source = new EventSource(`${API}/stream/multi?auctions=${auctionIdKey}`);
       source.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'bid') {
@@ -76,7 +79,7 @@ const AuctionDetailPage = () => {
     };
     connect();
     return () => { stopped = true; source?.close(); };
-  }, [id]);
+  }, [auctionIdKey]);
 
   // Auto-expand and scroll to a vehicle linked from the homepage carousel
   useEffect(() => {
