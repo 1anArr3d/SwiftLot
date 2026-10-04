@@ -60,24 +60,35 @@ def get_db() -> _ConnCtx:
 
 
 def query(sql: str, args: tuple = (), one: bool = False):
-    """Run a SELECT and return all rows (or one). Rows are dict-like."""
-    raw = _get_pool().getconn()
-    broken = False
-    try:
-        with raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, args or None)
-            rows = cur.fetchall()
+    """
+    Run a SELECT and return all rows (or one). Rows are dict-like.
+
+    Retries once on a dead pooled connection. Neon drops idle connections
+    after a while, and the pool doesn't health-check on checkout — it looks
+    fine at the OS/TCP level until actually used — so the first query after
+    any quiet period reliably hands back a connection that fails with
+    "SSL connection has been closed unexpectedly". Without a retry this
+    surfaced as a real 500 to whichever visitor's request happened to be
+    that first query (confirmed in production logs on a ~2h cadence,
+    matching Neon's idle timeout) — e.g. the homepage or auctions page
+    looking empty/broken until a manual refresh gave it a fresh connection.
+    """
+    for attempt in (1, 2):
+        raw = _get_pool().getconn()
+        try:
+            with raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, args or None)
+                rows = cur.fetchall()
+            raw.rollback()  # no-op for reads; releases any implicit txn
+            _get_pool().putconn(raw, close=False)
             return (rows[0] if rows else None) if one else rows
-    except Exception:
-        broken = True
-        raise
-    finally:
-        if not broken:
-            try:
-                raw.rollback()  # no-op for reads; releases any implicit txn
-            except Exception:
-                broken = True
-        _get_pool().putconn(raw, close=broken)
+        except psycopg2.OperationalError:
+            _get_pool().putconn(raw, close=True)
+            if attempt == 2:
+                raise
+        except Exception:
+            _get_pool().putconn(raw, close=True)
+            raise
 
 
 def init_db():
