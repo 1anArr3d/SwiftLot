@@ -138,8 +138,8 @@ def get_listings_page(page: int = 1, seller: str = None) -> dict:
         url += f"&seller={seller}"
     flat = _fetch_flat(url)
     root = _decode(flat, flat[0])
-    page_data = root.get("pages/auctions/Auctions") or {}
-    return page_data.get("data") or {}
+    route_data = (root.get("pages/auctionsRoute/AuctionsRoute") or {}).get("data") or {}
+    return route_data.get("data") or {}
 
 
 def get_all_listings() -> list[dict]:
@@ -158,7 +158,8 @@ def get_all_feed() -> tuple[list[dict], list[dict]]:
 
     first_flat = _fetch_flat(f"{base}&page=1")
     first_root = _decode(first_flat, first_flat[0])
-    first = (first_root.get("pages/auctions/Auctions") or {}).get("data") or {}
+    first_route = (first_root.get("pages/auctionsRoute/AuctionsRoute") or {}).get("data") or {}
+    first = first_route.get("data") or {}
 
     total    = first.get("total") or 0
     per_page = first.get("perPage") or 12
@@ -171,7 +172,8 @@ def get_all_feed() -> tuple[list[dict], list[dict]]:
     for p in range(2, total_pages + 1):
         page_data_flat = _fetch_flat(f"{base}&page={p}")
         page_root = _decode(page_data_flat, page_data_flat[0])
-        page = (page_root.get("pages/auctions/Auctions") or {}).get("data") or {}
+        page_route = (page_root.get("pages/auctionsRoute/AuctionsRoute") or {}).get("data") or {}
+        page = page_route.get("data") or {}
         active.extend(page.get("unitListings") or [])
         sold.extend(page.get("soldUnitListings") or [])
 
