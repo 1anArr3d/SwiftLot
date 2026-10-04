@@ -88,7 +88,13 @@ def search_vehicles(
     region_id: str = None,
     limit: int = None,
 ):
-    filters, args = ["v.make NOT IN ('OTHER', 'OTHER-NOT FOUND') AND v.year IS NOT NULL AND v.year < 9000"], []
+    filters, args = [
+        "v.make NOT IN ('OTHER', 'OTHER-NOT FOUND') AND v.year IS NOT NULL AND v.year < 9000",
+        """NOT EXISTS (
+            SELECT 1 FROM auctions a
+            WHERE a.auction_id = v.auction_id AND a.auction_status = 'completed'
+        )""",
+    ], []
     if make:
         filters.append("UPPER(make) = UPPER(%s)")
         args.append(make)
