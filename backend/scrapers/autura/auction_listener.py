@@ -152,48 +152,39 @@ def unsubscribe_auction(auction_id: str):
         asyncio.run_coroutine_threadsafe(_unsubscribe_async(auction_id), _event_loop)
 
 
-def reconcile(active_ids: set[str]):
+def sync_subscriptions():
     """
-    Primary sync path. Called by run_full_feed() with the auction ids it just
-    confirmed active, entirely in-memory — no DB round trip. subscribe_auction()
-    is a no-op for ids already subscribed, so this is safe to call every scrape.
+    Safety-net poll — re-subscribes any auction_id that currently has a
+    connected SSE client but no live Ably subscription (e.g. a subscribe
+    silently failed, or the connection dropped and channels weren't
+    re-attached). Scoped to actual viewers, not the whole inventory: Autura's
+    Ably setup has a hard ceiling around 200 channels per connection
+    (confirmed by testing — attaches start failing past ~200 with no
+    reason), so subscribing to every active auction_id up front doesn't scale
+    once inventory passes that size. Subscribe-on-view / unsubscribe-on-last-
+    disconnect (add_client/remove_client below) keeps concurrent channel
+    usage bounded by how many vehicles people are actually watching right
+    now, which in practice is nowhere near the ceiling.
     """
-    for auction_id in active_ids:
-        subscribe_auction(auction_id)
-
-
-def sync_with_db():
-    """
-    Fallback safety net only — NOT the primary sync path (see reconcile()).
-    Catches the case where a subscribe_auction() call from reconcile() silently
-    failed (e.g. exception in _subscribe_async). Queries Postgres, so this is
-    intentionally run infrequently by start_watchdog(); tightening its interval
-    does not improve normal-path status timeliness, which is bounded by the
-    scrape interval, not by this poll.
-    """
-    rows = query("SELECT DISTINCT auction_id FROM vehicles WHERE auction_id IS NOT NULL")
-    for row in rows:
-        subscribe_auction(row["auction_id"])
+    for auction_id, queues in list(_clients.items()):
+        if queues:
+            subscribe_auction(auction_id)
 
 
 def start_watchdog(interval: int = 900):
-    """
-    Safety-net poll (default 15 min) — retries any subscribe_auction() call
-    that failed silently during the last reconcile(). Not the primary sync
-    path; see reconcile() and sync_with_db() docstrings.
-    """
+    """Safety-net poll (default 15 min) for sync_subscriptions() — see its docstring."""
     def _run():
         while True:
             try:
-                sync_with_db()
+                sync_subscriptions()
             except Exception:
-                logger.exception("Watchdog sync_with_db failed")
+                logger.exception("Watchdog sync_subscriptions failed")
             threading.Event().wait(interval)
     threading.Thread(target=_run, daemon=True, name="update-watchdog").start()
 
 
 def start_periodic_scraper(interval: int = 7200):
-    """Full feed rescrape every N seconds. run_full_feed() reconciles subscriptions itself."""
+    """Full feed rescrape every N seconds."""
     def _run():
         while True:
             threading.Event().wait(interval)
@@ -229,8 +220,12 @@ def add_client(auction_id: str, queue):
 
 
 def remove_client(auction_id: str, queue):
-    if auction_id in _clients:
-        try:
-            _clients[auction_id].remove(queue)
-        except ValueError:
-            pass
+    if auction_id not in _clients:
+        return
+    try:
+        _clients[auction_id].remove(queue)
+    except ValueError:
+        pass
+    if not _clients[auction_id]:
+        del _clients[auction_id]
+        unsubscribe_auction(auction_id)

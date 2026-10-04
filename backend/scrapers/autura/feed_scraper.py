@@ -225,7 +225,6 @@ def run_full_feed() -> dict:
     all_active, all_sold = get_all_feed()
 
     seen_sellers: set[str] = set()
-    active_ids:   set[str] = set()   # per-vehicle auction_ids (Ably channels)
     active_vins:  set[str] = set()
 
     print(f"[feed] {len(all_active)} active, {len(all_sold)} sold listings fetched")
@@ -245,21 +244,17 @@ def run_full_feed() -> dict:
                     if rid not in seen_sellers:
                         seen_sellers.add(rid)
                         _upsert_seller(conn, record)
-
-                bidding = listing.get("biddingInfo") or {}
-                aid = (bidding.get("auctionInfo") or {}).get("auctionId")
-                if aid:
-                    active_ids.add(aid)
         print(f"[feed] {min(i + CHUNK, len(all_active))}/{len(all_active)} vehicles written")
 
     with get_db() as conn:
         for listing in all_sold:
             _insert_sold(conn, listing)
 
+    # Ably subscriptions are lazy (subscribe-on-view, see auction_listener.py)
+    # and don't need reconciling against the full active set here — Autura's
+    # Ably setup caps out around 200 channels per connection, so proactively
+    # subscribing to the whole inventory doesn't scale.
     _handle_ended_vehicles(active_vins)
-
-    from scrapers.autura import auction_listener as listener
-    listener.reconcile(active_ids)
 
     print(f"[feed] Done: {len(all_active)} vehicles, {len(seen_sellers)} sellers, {len(all_sold)} sold")
     return {"vehicles": len(all_active), "sellers": len(seen_sellers), "sold": len(all_sold)}
