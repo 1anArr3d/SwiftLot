@@ -79,11 +79,20 @@ export default function HomePage() {
     for (let i = 0; i < NUM_CARDS; i++) paintCard(i, nextVehicle());
   }
 
-  // Fetch + reshuffle pool; new/deleted vehicles flow in on next recycle
+  // Fetch + reshuffle pool; new/deleted vehicles flow in on next recycle.
+  // A failed first fetch used to sit silently until the next 60s interval
+  // tick, leaving the carousel permanently blank until a manual refresh —
+  // retry quickly once instead of waiting out the full interval.
   useEffect(() => {
-    const fetchPool = async () => {
+    let cancelled = false;
+    let timer = null;
+
+    const fetchPool = async (isRetry = false) => {
       try {
-        const data = await fetch(`${API}/vehicles?limit=500`).then(r => r.json());
+        const r = await fetch(`${API}/vehicles?limit=500`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        if (cancelled) return;
         const now = Date.now();
         pool.current = shuffle(data.filter(v =>
           v.images_count > 0 && v.images &&
@@ -97,11 +106,14 @@ export default function HomePage() {
           });
         }
         tryInit();
-      } catch {}
+      } catch (err) {
+        console.error(err);
+        if (!cancelled && !isRetry) timer = setTimeout(() => fetchPool(true), 2000);
+      }
     };
     fetchPool();
     const t = setInterval(fetchPool, REFETCH);
-    return () => clearInterval(t);
+    return () => { cancelled = true; clearInterval(t); clearTimeout(timer); };
   }, []);
 
   // RAF: advance scroll + recycle off-screen cards
