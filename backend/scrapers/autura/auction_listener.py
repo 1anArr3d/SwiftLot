@@ -149,7 +149,7 @@ def sync_with_db():
     does not improve normal-path status timeliness, which is bounded by the
     scrape interval, not by this poll.
     """
-    rows = query("SELECT auction_id FROM auctions WHERE auction_status IN ('PRE_BID', 'ACTIVE')")
+    rows = query("SELECT DISTINCT auction_id FROM vehicles WHERE auction_id IS NOT NULL")
     for row in rows:
         subscribe_auction(row["auction_id"])
 
@@ -186,8 +186,8 @@ def start_periodic_scraper(interval: int = 7200):
                 from .inspection_scraper import run_inspection_batch
                 rows = query(
                     "SELECT v.vin FROM vehicles v "
-                    "JOIN auctions a ON a.auction_id = v.auction_id "
-                    "WHERE (v.last_recorded_odo IS NULL OR v.last_recorded_odo = 'N/A') AND a.seller_state = 'TX'"
+                    "JOIN sellers s ON s.region_id = v.region_id "
+                    "WHERE (v.last_recorded_odo IS NULL OR v.last_recorded_odo = 'N/A') AND s.seller_state = 'TX'"
                 )
                 vins = [r["vin"] for r in rows]
                 if vins:

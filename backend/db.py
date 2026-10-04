@@ -82,15 +82,13 @@ def query(sql: str, args: tuple = (), one: bool = False):
 
 def init_db():
     with get_db() as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS auctions (
-            auction_id      TEXT PRIMARY KEY,
-            region_id       TEXT,
+        conn.execute('''CREATE TABLE IF NOT EXISTS sellers (
+            region_id       TEXT PRIMARY KEY,
             seller_name     TEXT,
-            auction_status  TEXT,
-            vehicles_listed INTEGER,
-            last_discovered TEXT,
-            ended_at        TEXT,
-            closes_at       TEXT
+            seller_city     TEXT,
+            seller_state    TEXT,
+            source          TEXT,
+            last_discovered TEXT
         )''')
 
         conn.execute('''CREATE TABLE IF NOT EXISTS vehicles (
@@ -188,23 +186,27 @@ def init_db():
         )''')
 
     with get_db() as conn:
-        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS seller_city TEXT")
-        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS seller_state TEXT")
-        conn.execute("ALTER TABLE auctions ADD COLUMN IF NOT EXISTS source TEXT")
-        # Backfill source for existing rows
-        conn.execute("""
-            UPDATE auctions SET source = 'copart'
-            WHERE source IS NULL
-              AND (auction_id ~ '^[0-9]+$' OR auction_id LIKE 'copart_%')
-        """)
-        conn.execute("UPDATE auctions SET source = 'autura' WHERE source IS NULL")
+        # One-time backfill: seed sellers from the old per-lot auctions table, if
+        # it's still around (auction_id there was really one row per vehicle, not
+        # per seller — region_id/seller_name/city/state is the only part worth
+        # keeping). Safe to run every boot: ON CONFLICT DO NOTHING makes it a
+        # no-op once sellers is populated.
+        legacy = conn.execute("SELECT to_regclass('auctions') AS t").fetchone()
+        if legacy and legacy["t"]:
+            conn.execute("""
+                INSERT INTO sellers (region_id, seller_name, seller_city, seller_state, source, last_discovered)
+                SELECT DISTINCT region_id, seller_name, seller_city, seller_state, source, last_discovered
+                FROM auctions
+                WHERE region_id IS NOT NULL
+                ON CONFLICT (region_id) DO NOTHING
+            """)
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_region_id ON vehicles (region_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_garage_user_id ON garage (user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_odometer_vin ON odometer_history (vin)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_vin ON historical_sales (vin)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_historical_make_model_year ON historical_sales (make, model, year)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_auctions_status ON auctions (auction_status)")
 
     print("[db] Schema ready.")

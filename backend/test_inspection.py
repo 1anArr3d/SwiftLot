@@ -16,18 +16,18 @@ def main():
     init_db()
 
     rows = query("""
-        SELECT v.vin, v.year, v.make, v.model, a.seller_state
+        SELECT v.vin, v.year, v.make, v.model, s.seller_state
         FROM vehicles v
-        JOIN auctions a ON a.auction_id = v.auction_id
+        JOIN sellers s ON s.region_id = v.region_id
         WHERE (v.last_recorded_odo IS NULL OR v.last_recorded_odo = 'N/A')
-          AND a.seller_state = 'TX'
+          AND s.seller_state = 'TX'
     """)
 
     if not rows:
         print("No unchecked TX vehicles found.")
-        print("Checking if any TX auctions exist at all...")
-        tx = query("SELECT COUNT(*) as n FROM auctions WHERE seller_state = 'TX'")
-        print(f"  TX auctions in DB: {tx[0]['n']}")
+        print("Checking if any TX sellers exist at all...")
+        tx = query("SELECT COUNT(*) as n FROM sellers WHERE seller_state = 'TX'")
+        print(f"  TX sellers in DB: {tx[0]['n']}")
         unchecked = query("SELECT COUNT(*) as n FROM vehicles WHERE last_recorded_odo IS NULL")
         print(f"  Unchecked vehicles total: {unchecked['n'] if isinstance(unchecked, dict) else unchecked[0]['n']}")
         return
