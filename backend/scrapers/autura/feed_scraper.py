@@ -276,6 +276,12 @@ def _harvest_sold_for_sellers(seller_ids: list[str]) -> dict:
     Shared by the immediate per-ended-seller harvest in _handle_ended_vehicles()
     and the periodic full-sweep run_sold_backfill() — same job, same code path,
     just different scope and trigger.
+
+    Deliberately sequential, not parallelized: a burst of concurrent fresh
+    connections to Neon's serverless Postgres gets dropped/rejected (confirmed
+    by testing — "server closed the connection unexpectedly" under ~6 concurrent
+    getconn() calls). Slow is fine here; this only walks more than a couple
+    sellers on the rare full backlog sweep, not on the normal per-cycle path.
     """
     inserted = errors = 0
     for seller_id in seller_ids:
