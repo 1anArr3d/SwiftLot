@@ -48,19 +48,26 @@ def health() -> dict:
     }
 
 
-def _ably_auth_headers() -> dict:
+async def _ably_auth_callback(token_params):
     """
     ably-auth is session-gated on Autura's side — the Ably SDK's own request to
     auth_url doesn't carry our scraping session's cookies unless forwarded
     explicitly, so without this every subscribe silently fails auth (connection
-    goes to FAILED, never raises anywhere visible). Captured once per process;
-    if the Autura session rotates (~monthly) while this process stays up, this
-    goes stale and needs a restart — acceptable for now, not auto-refreshed.
+    goes to FAILED, never raises anywhere visible).
+
+    Using auth_callback instead of a static auth_url + auth_headers: Ably calls
+    this fresh every time it needs a token (initial connect + each periodic
+    renewal before the previous token's TTL expires), so it always goes through
+    _authed_get() — which already re-authenticates on session expiry — instead
+    of a cookie string captured once at process start. A static auth_headers
+    dict would go stale whenever Autura's session rotates (~monthly) without
+    ever raising anywhere, the same invisible-failure shape as the original bug.
     """
-    from .autura_api import _get_session
-    sess = _get_session()
-    cookie_str = "; ".join(f"{k}={v}" for k, v in dict(sess.cookies).items())
-    return {"Cookie": cookie_str}
+    import json
+    from .autura_api import _authed_get
+    resp = await asyncio.to_thread(_authed_get, ABLY_AUTH_URL, timeout=20)
+    resp.raise_for_status()
+    return json.loads(resp.text)
 
 
 def _channel_name(auction_id: str) -> str:
@@ -120,7 +127,7 @@ async def _on_update(auction_id: str, message):
 async def _subscribe_async(auction_id: str):
     global _ably
     if _ably is None:
-        _ably = AblyRealtime(auth_url=ABLY_AUTH_URL, auth_headers=_ably_auth_headers())
+        _ably = AblyRealtime(auth_callback=_ably_auth_callback)
     ch = _ably.channels.get(_channel_name(auction_id))
     await ch.subscribe(lambda msg: asyncio.ensure_future(_on_update(auction_id, msg)))
     with _lock:
