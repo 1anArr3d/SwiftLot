@@ -15,6 +15,19 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     return _pool
 
 
+def _checkout() -> psycopg2.extensions.connection:
+    """Borrow a pooled connection, discarding any Neon closed while idle (all can die at once)."""
+    for _ in range(21):  # maxconn + 1: every pooled connection may be dead
+        raw = _get_pool().getconn()
+        try:
+            raw.cursor().execute("SELECT 1")
+            raw.rollback()
+            return raw
+        except psycopg2.OperationalError:
+            _get_pool().putconn(raw, close=True)
+    return _get_pool().getconn()
+
+
 class _Conn:
     """Thin wrapper so callers can do conn.execute(sql, args) like sqlite3."""
 
@@ -31,7 +44,7 @@ class _ConnCtx:
     """Context manager: borrows a connection, commits or rolls back, returns it."""
 
     def __enter__(self) -> _Conn:
-        self._raw = _get_pool().getconn()
+        self._raw = _checkout()
         self._raw.autocommit = False
         return _Conn(self._raw)
 
@@ -74,7 +87,7 @@ def query(sql: str, args: tuple = (), one: bool = False):
     looking empty/broken until a manual refresh gave it a fresh connection.
     """
     for attempt in (1, 2):
-        raw = _get_pool().getconn()
+        raw = _checkout()
         try:
             with raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql, args or None)
