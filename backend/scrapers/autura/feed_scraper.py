@@ -338,7 +338,7 @@ def _handle_ended_vehicles(active_vins: set[str]):
 
     for row in gone:
         if row["auction_id"]:
-            listener._broadcast(row["auction_id"], {"type": "ended"})
+            listener._broadcast(row["auction_id"], {"type": "ended", "auction_id": row["auction_id"]})
             listener.unsubscribe_auction(row["auction_id"])
 
     print(f"[feed] Removed {len(gone)} ended vehicle(s)")
