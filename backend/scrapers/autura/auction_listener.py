@@ -150,13 +150,20 @@ def subscribe_auction(auction_id: str):
 async def _unsubscribe_async(auction_id: str):
     ch = _subscriptions.pop(auction_id, None)
     if ch:
-        await ch.unsubscribe()
+        # unsubscribe() only drops listeners (and is sync in ably 2.x); without detach+release
+        # the channel stays attached and leaks toward Autura's ~200-channel ceiling.
+        ch.unsubscribe()
+        await ch.detach()
+        _ably.channels.release(ch.name)
         logger.info("Unsubscribed from auction %s", auction_id)
 
 
 def unsubscribe_auction(auction_id: str):
     if _event_loop and auction_id in _subscriptions:
-        asyncio.run_coroutine_threadsafe(_unsubscribe_async(auction_id), _event_loop)
+        future = asyncio.run_coroutine_threadsafe(_unsubscribe_async(auction_id), _event_loop)
+        future.add_done_callback(
+            lambda f: f.exception() and logger.error("Unsubscribe failed for auction %s: %s", auction_id, f.exception())
+        )
 
 
 def sync_subscriptions():
