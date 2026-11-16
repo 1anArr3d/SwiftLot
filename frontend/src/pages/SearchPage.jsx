@@ -7,9 +7,11 @@ import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
 
 const parseImages = (raw) => { try { return JSON.parse(raw); } catch { return []; } };
-const fmtAvgSale = (s, fmt$) => {
-  if (!s) return '—';
-  return `${s.approx ? '~' : ''}${fmt$(s.avg_sale)} avg · ${s.count} sale${s.count !== 1 ? 's' : ''} (${fmt$(s.min_sale)}–${fmt$(s.max_sale)})`;
+const LEVEL_LABEL = { year: 'same year', near: '±2 yrs', all: 'all years' };
+const fmtRange = (s, fmt$) => s ? `${fmt$(s.low)}–${fmt$(s.high)}` : '—';
+const fmtRangeDetail = (s, fmt$) => {
+  if (!s) return 'Not enough sales data';
+  return `${fmtRange(s, fmt$)} · median ${fmt$(s.median)} · ${s.count} sales (${LEVEL_LABEL[s.level]})`;
 };
 
 const SearchPage = () => {
@@ -202,7 +204,7 @@ const SearchPage = () => {
           <table className="vehicle-table search-table">
             <thead>
               <tr>
-                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Avg Sale', ''].map((h, i) => (
+                {['Year', 'Make', 'Model', 'Color', 'Keys', 'Cat', 'Status', 'Engine', 'Drive', 'Fuel', 'Bid', 'Reserve', 'VIN', 'Odometer', 'Price Range', ''].map((h, i) => (
                   <th key={i}>{h}</th>
                 ))}
               </tr>
@@ -236,7 +238,7 @@ const SearchPage = () => {
                     <td>{fmt$(car.reserve_price)}</td>
                     <td className="vin-text">{car.vin}</td>
                     <td className="odo-text">{car.last_recorded_odo || '—'}{car.odo_rollback && <div><span className="odo-rollback" title="A later inspection recorded fewer miles than an earlier one.">⚠ Possible rollback</span></div>}</td>
-                    <td className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</td>
+                    <td className="avg-sale-text" title={histStats[statsKey(car)] ? fmtRangeDetail(histStats[statsKey(car)], fmt$) : 'Not enough sales data'}>{fmtRange(histStats[statsKey(car)], fmt$)}{histStats[statsKey(car)] && histStats[statsKey(car)].level !== 'year' && <div className="range-level">{LEVEL_LABEL[histStats[statsKey(car)].level]}</div>}</td>
                     <td>
                       <button
                         className={`btn${liked ? ' saved' : ''}`}
@@ -287,7 +289,7 @@ const SearchPage = () => {
                               <div className="detail-item"><span className="detail-label">Cylinders</span><span>{car.num_cylinders || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Doc Type</span><span>{car.documentation_type || '—'}</span></div>
                               <div className="detail-item"><span className="detail-label">Current Bid</span><span className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</span></div>
-                              <div className="detail-item"><span className="detail-label">Avg Sale</span><span className="avg-sale-text">{fmtAvgSale(histStats[statsKey(car)], fmt$)}</span></div>
+                              <div className="detail-item"><span className="detail-label">Price Range</span><span className="avg-sale-text">{fmtRangeDetail(histStats[statsKey(car)], fmt$)}</span></div>
                               <div className="detail-item"><span className="detail-label">Reserve</span><span>{fmt$(car.reserve_price)}</span></div>
                               <div className="detail-item"><span className="detail-label">Buyer Fee</span><span>{fmt$(car.fee_price)}</span></div>
                               {car.bid_expiration && <div className="detail-item"><span className="detail-label">Bid Expires</span><span>{new Date(car.bid_expiration).toLocaleString()}</span></div>}

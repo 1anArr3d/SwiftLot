@@ -14,7 +14,7 @@ Live at [swift-lot.com](https://swift-lot.com)
 - Discovers active auctions across all active sellers nationwide (no hardcoded state list)
 - Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then fetches up to 5 years of odometer readings per VIN via authenticated HTTP
 - **Odometer rollback detection** — flags a vehicle when a newer inspection records more than 2,000 fewer miles than an older one, ignoring single out-of-line readings (inspector typos); shown as a "Possible rollback" badge
-- Captures final sale prices from completed auctions and surfaces historical average sale prices per year/make/model
+- Captures final sale prices from completed auctions and shows a **price range** (25th–75th percentile) per vehicle from the closest match with 5+ sales: same year/make/model, then ±2 years, then any year. Truncated makes (`CHEVROL` → `CHEVROLET`) and punctuation variants (`F - 150` → `F150`) are merged; trims are not
 - Firebase Auth — per-user garage (saved vehicles) and saved auctions (saved sellers)
 - Garage snapshots preserve a vehicle's last-known data after it sells or is pulled, so saved vehicles are never lost
 - Filterable UI by year range, make, model, start status, engine, drivetrain, odometer range
@@ -37,6 +37,8 @@ backend/
   models.py                    # Pydantic response models
   auth.py                      # Firebase ID token verification
   routes.py                    # All API route handlers (incl. SSE /stream endpoints)
+  pricing.py                   # Price ranges + make/model name merging (in-memory, hourly refresh)
+  test_pricing.py              # Self-check for pricing levels and name merging
   import_historical.py         # One-off: load historical_sales.csv into Postgres
   test_inspection.py           # Manual test: inspection batch against the DB, with timing
   test_rollback.py             # Self-check for rollback detection on real readings
@@ -138,8 +140,8 @@ App at `http://localhost:5173`
 | GET | `/api/v1/vehicles` | Search live inventory (make/model/year/region filters) |
 | GET | `/api/v1/vehicles/:vin/history` | Sale history for a VIN |
 | GET | `/api/v1/vehicles/:vin/odometer` | Odometer history for a VIN |
-| GET | `/api/v1/historical/stats` | Avg sale price by make/model/year |
-| POST | `/api/v1/historical/stats/batch` | Avg sale price for multiple make/model/year combos |
+| GET | `/api/v1/historical/stats` | Price range by make/model/year |
+| POST | `/api/v1/historical/stats/batch` | Price ranges for multiple make/model/year combos |
 | GET | `/api/v1/historical/search` | Search historical sales |
 | GET | `/api/v1/garage` | Saved vehicles (auth required) |
 | POST | `/api/v1/garage/:vin` | Add vehicle to garage (auth required) |

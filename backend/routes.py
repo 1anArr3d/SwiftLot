@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from db import query, get_db
+from pricing import price_range
 from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction
 from scrapers.autura import auction_listener as listener
 import asyncio
@@ -131,66 +132,20 @@ def get_vehicle_history(vin: str):
 
 @router.get("/historical/stats", tags=["historical"])
 def get_historical_stats(make: str, model: str, year: int):
-    _sql = """SELECT
-               COUNT(*)                          AS count,
-               ROUND(AVG(final_sale)::numeric, 0) AS avg_sale,
-               MIN(final_sale)                   AS min_sale,
-               MAX(final_sale)                   AS max_sale
-           FROM historical_sales
-           WHERE UPPER(make) = UPPER(%s)
-             AND UPPER(model) = UPPER(%s)
-             AND {year_clause}
-             AND final_sale IS NOT NULL"""
-
-    row = query(_sql.format(year_clause="year = %s"), (make, model, year), one=True)
-    if row and row["count"] >= 3:
-        return {"make": make, "model": model, "year": year, "count": row["count"],
-                "avg_sale": row["avg_sale"], "min_sale": row["min_sale"], "max_sale": row["max_sale"]}
-
-    # Fall back to ±2 year window
-    row = query(_sql.format(year_clause="year BETWEEN %s AND %s"), (make, model, year - 2, year + 2), one=True)
-    if not row or row["count"] < 3:
-        return {"make": make, "model": model, "year": year, "count": 0}
-    return {
-        "make": make,
-        "model": model,
-        "year": year,
-        "count": row["count"],
-        "avg_sale": row["avg_sale"],
-        "min_sale": row["min_sale"],
-        "max_sale": row["max_sale"],
-        "approx": True,
-    }
+    """Price range (25th-75th percentile) from the closest match with enough sales; see pricing.py."""
+    return {"make": make, "model": model, "year": year, **(price_range(make, model, year) or {"count": 0})}
 
 
 @router.post("/historical/stats/batch", tags=["historical"])
 def get_historical_stats_batch(combos: list[dict]):
-    _sql = """SELECT
-               COUNT(*)                           AS count,
-               ROUND(AVG(final_sale)::numeric, 0) AS avg_sale,
-               MIN(final_sale)                    AS min_sale,
-               MAX(final_sale)                    AS max_sale
-           FROM historical_sales
-           WHERE UPPER(make) = UPPER(%s)
-             AND UPPER(model) = UPPER(%s)
-             AND {year_clause}
-             AND final_sale IS NOT NULL"""
-
     results = {}
     for c in combos:
         make, model, year = c.get("make"), c.get("model"), c.get("year")
         if not make or not model or not year:
             continue
-        key = f"{make}|{model}|{year}"
-        row = query(_sql.format(year_clause="year = %s"), (make, model, year), one=True)
-        if row and row["count"] >= 3:
-            results[key] = {"count": row["count"], "avg_sale": row["avg_sale"],
-                            "min_sale": row["min_sale"], "max_sale": row["max_sale"]}
-            continue
-        row = query(_sql.format(year_clause="year BETWEEN %s AND %s"), (make, model, year - 2, year + 2), one=True)
-        if row and row["count"] >= 3:
-            results[key] = {"count": row["count"], "avg_sale": row["avg_sale"],
-                            "min_sale": row["min_sale"], "max_sale": row["max_sale"], "approx": True}
+        r = price_range(make, model, year)
+        if r:
+            results[f"{make}|{model}|{year}"] = r
     return results
 
 
