@@ -225,6 +225,7 @@ def init_db():
                 ON CONFLICT (region_id) DO NOTHING
             """)
 
+        conn.execute("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS odo_rollback BOOLEAN DEFAULT FALSE")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_region_id ON vehicles (region_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")

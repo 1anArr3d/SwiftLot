@@ -164,6 +164,7 @@ input, button { font-family: var(--font); }
 .status-completed    { background: rgba(74,106,138,0.15); color: var(--text-primary);  border: 1px solid var(--border-dim); }
 
 .badge-live   { font-size: 10px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; padding: 3px 8px; border-radius: var(--radius-lg); background: rgba(46,204,113,0.15); color: #2ecc71; border: 1px solid rgba(46,204,113,0.5); flex-shrink: 0; }
+.odo-rollback { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: var(--radius-lg); background: rgba(231,76,60,0.15); color: #e74c3c; border: 1px solid rgba(231,76,60,0.5); white-space: nowrap; }
 .badge-paused { background: rgba(230,126,34,0.15); color: #e67e22; border-color: rgba(230,126,34,0.5); }
 .auction-card.is-live { border-color: rgba(46,204,113,0.5); }
 .auction-card.source-autura { background: #1a3a26; }

@@ -202,12 +202,17 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
 
 # ── DB save ───────────────────────────────────────────────────────────────────
 
+def is_rollback(results: list[dict]) -> bool:
+    """results are newest-first; a newer reading below an older one means a rollback."""
+    return any(new["odometer"] < old["odometer"] for new, old in zip(results, results[1:]))
+
+
 def _save_history(vin: str, results: list[dict]):
     with get_db() as conn:
         # Drop stale rows from earlier runs (fewer results now, or past mismatches)
         conn.execute("DELETE FROM odometer_history WHERE vin = %s", (vin,))
         if not results:
-            conn.execute("UPDATE vehicles SET last_recorded_odo = 'N/A' WHERE vin = %s", (vin,))
+            conn.execute("UPDATE vehicles SET last_recorded_odo = 'N/A', odo_rollback = FALSE WHERE vin = %s", (vin,))
             return
         for i, res in enumerate(results):
             conn.execute(
@@ -220,7 +225,10 @@ def _save_history(vin: str, results: list[dict]):
                 (f"{vin}_{i}", vin, res["date"], res["odometer"]),
             )
         display = "\n".join(f"{r['date']}: {r['odometer']:,}" for r in results)
-        conn.execute("UPDATE vehicles SET last_recorded_odo = %s WHERE vin = %s", (display, vin))
+        conn.execute(
+            "UPDATE vehicles SET last_recorded_odo = %s, odo_rollback = %s WHERE vin = %s",
+            (display, is_rollback(results), vin),
+        )
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

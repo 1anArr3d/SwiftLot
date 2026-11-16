@@ -235,7 +235,7 @@ const SearchPage = () => {
                     <td className={car.current_bid ? 'bid-active' : ''}>{fmt$(car.current_bid)}</td>
                     <td>{fmt$(car.reserve_price)}</td>
                     <td className="vin-text">{car.vin}</td>
-                    <td className="odo-text">{car.last_recorded_odo || '—'}</td>
+                    <td className="odo-text">{car.last_recorded_odo || '—'}{car.odo_rollback && <div><span className="odo-rollback" title="A later inspection recorded fewer miles than an earlier one.">⚠ Possible rollback</span></div>}</td>
                     <td className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</td>
                     <td>
                       <button
@@ -294,7 +294,7 @@ const SearchPage = () => {
                               {car.seller_notes && <div className="detail-item detail-item-full"><span className="detail-label">Seller Notes</span><span>{car.seller_notes}</span></div>}
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
-                                <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}</span></div>
+                                <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}{car.odo_rollback && <div><span className="odo-rollback" title="A later inspection recorded fewer miles than an earlier one.">⚠ Possible rollback</span></div>}</span></div>
                               )}
                             </div>
                           </div>

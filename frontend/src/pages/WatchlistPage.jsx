@@ -248,7 +248,7 @@ const WatchlistPage = () => {
                     <td>{car.fuel_type || '—'}</td>
                     <td>{fmt$(getBid(car))}</td>
                     <td className="vin-text">{car.vin}</td>
-                    <td className="odo-text">{car.last_recorded_odo || '—'}</td>
+                    <td className="odo-text">{car.last_recorded_odo || '—'}{car.odo_rollback && <div><span className="odo-rollback" title="A later inspection recorded fewer miles than an earlier one.">⚠ Possible rollback</span></div>}</td>
                     <td className="avg-sale-text">{histStats[statsKey(car)] ? fmt$(histStats[statsKey(car)].avg_sale) : '—'}</td>
                     <td>
                       <button className="btn" onClick={e => handleRemove(e, car.vin)}>Remove</button>
@@ -280,7 +280,7 @@ const WatchlistPage = () => {
                               )}
                               <div className="detail-item detail-item-full"><span className="detail-label">VIN</span><span className="vin-text">{car.vin}</span></div>
                               {car.last_recorded_odo && (
-                                <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}</span></div>
+                                <div className="detail-item detail-item-full"><span className="detail-label">Odometer History</span><span className="odo-text">{car.last_recorded_odo}{car.odo_rollback && <div><span className="odo-rollback" title="A later inspection recorded fewer miles than an earlier one.">⚠ Possible rollback</span></div>}</span></div>
                               )}
                             </div>
                             <div className="expanded-actions">
