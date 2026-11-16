@@ -12,7 +12,8 @@ Live at [swift-lot.com](https://swift-lot.com)
 - **Single-pass feed scrape** — one paginated crawl of `mp.autura.com/auctions.data` returns vehicle details, bidding info, and seller info together; no per-auction or per-vehicle follow-up calls needed
 - **VIN-based lifecycle tracking** — a vehicle whose VIN drops out of the active feed is harvested (final sale price captured) and removed outright, instead of being flagged and left to accumulate
 - Discovers active auctions across all active sellers nationwide (no hardcoded state list)
-- Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then batch-fetches odometer history for every VIN via authenticated HTTP
+- Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then fetches up to 5 years of odometer readings per VIN via authenticated HTTP
+- **Odometer rollback detection** — flags a vehicle when a newer inspection records more than 2,000 fewer miles than an older one, ignoring single out-of-line readings (inspector typos); shown as a "Possible rollback" badge
 - Captures final sale prices from completed auctions and surfaces historical average sale prices per year/make/model
 - Firebase Auth — per-user garage (saved vehicles) and saved auctions (saved sellers)
 - Garage snapshots preserve a vehicle's last-known data after it sells or is pulled, so saved vehicles are never lost
@@ -37,7 +38,10 @@ backend/
   auth.py                      # Firebase ID token verification
   routes.py                    # All API route handlers (incl. SSE /stream endpoints)
   import_historical.py         # One-off: load historical_sales.csv into Postgres
-  test_inspection.py           # Manual test script for the inspection scraper
+  test_inspection.py           # Manual test: inspection batch against the DB, with timing
+  test_rollback.py             # Self-check for rollback detection on real readings
+  dump_inspection.py           # Dumps raw mytxcar pages; reproduces the shared-session bug
+  survey_inspection.py         # Surveys ~100 VINs: page contents, timings, row-picking strategies
   scrapers/autura/
     autura_api.py              # HTTP client — login, turbo-stream decoding, feed/seller pagination
     feed_scraper.py            # Single-pass feed scrape: upserts vehicles + sellers,
@@ -73,6 +77,7 @@ frontend/
 - **`sellers`** — static-ish metadata per seller (name, city, state, region_id). No status or bidding fields.
 - **`vehicles`** — one row per VIN, carrying its own `auction_id`, `current_bid`, `bid_expiration`. This is the source of truth for what's live; `vehicles_count` and `closes_at` shown per seller are computed live by aggregating this table, not stored separately.
 - **`historical_sales`** — final sale prices, independent of whether the vehicle row still exists.
+- **`odometer_history`** — TX inspection readings per VIN (`row_id` = `{vin}_{n}`, `_0` newest). `vehicles.last_recorded_odo` holds a display copy and `vehicles.odo_rollback` the rollback flag.
 - **`garage`** / **`saved_auctions`** — per-user saved vehicles/sellers; garage keeps its own copy of a vehicle's last-known fields so a saved vehicle still displays after it's gone from `vehicles`.
 
 ## Local Setup
@@ -156,6 +161,8 @@ App at `http://localhost:5173`
 ## Notes
 
 - Inspection scraper uses Playwright with `headless=False` to bypass Cloudflare Turnstile on mytxcar.org, then reuses the acquired session for all subsequent VIN lookups via HTTP
+- **Inspection lookups run on one worker, on purpose.** mytxcar is ASP.NET WebForms: the server keeps each session's last search, and the detail request only says "row N of my last search". With 8 threads sharing one session, a lookup's detail request was answered from another thread's search, saving other cars' mileage. `dump_inspection.py` reproduced it (6 of 8 VINs wrong in parallel, 0 sequentially). Lookups are now sequential (~0.5 s per VIN), every detail page is checked for the searched VIN before saving, and a VIN's old rows are cleared on each save
+- "Safety Only" inspection pages label the reading `Odometer Reading` rather than `Odometer`; 97% of them have one, so they are not skipped
 - The systemd service uses `xvfb-run --auto-servernum` — no manual Xvfb setup needed
 - Ably's `auth_url` requires the same session cookies as the scraping client (Autura gates `/ably-auth`), so the realtime client forwards them explicitly — a fresh/unauthenticated request to `auth_url` gets a 403
 - Sold-listing harvest runs sequentially, deliberately not parallelized — Neon's serverless Postgres drops connections under a burst of concurrent new ones

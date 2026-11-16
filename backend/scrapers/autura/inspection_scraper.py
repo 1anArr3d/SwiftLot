@@ -199,9 +199,20 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
 
 # ── DB save ───────────────────────────────────────────────────────────────────
 
+ROLLBACK_MIN_DROP = 2000  # smaller drops are usually inspector typos
+
+
 def is_rollback(results: list[dict]) -> bool:
-    """results are newest-first; a newer reading below an older one means a rollback."""
-    return any(new["odometer"] < old["odometer"] for new, old in zip(results, results[1:]))
+    """results are newest-first. True if a newer reading is more than ROLLBACK_MIN_DROP below
+    an older one, ignoring a single reading out of line with both neighbours (likely a typo)."""
+    m = [r["odometer"] for r in results]
+    tol = ROLLBACK_MIN_DROP
+    kept = [
+        x for i, x in enumerate(m)
+        # middle reading whose neighbours agree with each other but not with it -> typo
+        if not (0 < i < len(m) - 1 and m[i + 1] <= m[i - 1] and not m[i + 1] - tol <= x <= m[i - 1] + tol)
+    ]
+    return any(new < old - tol for new, old in zip(kept, kept[1:]))
 
 
 def _save_history(vin: str, results: list[dict]):
