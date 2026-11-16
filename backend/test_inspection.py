@@ -7,6 +7,7 @@ and prints results.
 """
 import sys
 import os
+import time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from db import init_db, query
@@ -38,7 +39,10 @@ def main():
         print(f"  {r['vin']} — {r['year']} {r['make']} {r['model']} (state={r['seller_state']})")
 
     print("\nRunning inspection batch...")
+    t0 = time.perf_counter()
     run_inspection_batch(vins)
+    elapsed = time.perf_counter() - t0
+    print(f"Batch took {elapsed:.1f}s ({elapsed / len(vins):.2f}s per VIN, includes browser login)")
 
     done = query("SELECT COUNT(*) as n FROM vehicles WHERE last_recorded_odo IS NOT NULL AND last_recorded_odo != 'N/A' AND vin = ANY(%s)", (vins,))
     print(f"\nDone: {done[0]['n']}/{len(vins)} VINs have odometer records")
