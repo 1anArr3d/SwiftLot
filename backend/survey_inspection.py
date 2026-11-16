@@ -131,7 +131,7 @@ def main():
                 timings["detail"].append(ms / 1000)
                 open(os.path.join(out, f"{vin}_{i}_detail.html"), "w", encoding="utf-8").write(detail)
                 fields = detail_fields(detail)
-                odo = fields.get("Odometer", "")
+                odo = fields.get("Odometer") or fields.get("Odometer Reading", "")  # Safety Only pages use "Odometer Reading"
                 vin_ok = fields.get("VIN") == vin
                 bad_vin += not vin_ok
                 (odo_by_type if odo.isdigit() else missing_by_type)[test_type] += 1

@@ -160,22 +160,9 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
     if not parser.links:
         return []
 
-    # "Safety Only" tests usually have no odometer (51/283 in survey_inspection.py), so skip their detail fetch
-    safety_only = {
-        row_id
-        for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.S) if "Safety Only" in tr
-        for row_id in re.findall(r"DoSelect\('[^']*',\s*'[^']*',\s*'(\d+)'", tr)
-    }
-
     result_hidden = _extract_hidden(html)
-    results, seen_years = [], set()
-    for link in parser.links[:10]:
-        if link["row_id"] in safety_only:
-            continue
-        year = link["date"].split("/")[-1].split(" ")[0][:4]
-        if year in seen_years or len(results) >= 5:
-            continue
-        seen_years.add(year)
+
+    def fetch_odometer(link) -> int | None:
         detail_data = {
             **result_hidden,
             "hidAction":      "SelectSearch",
@@ -186,16 +173,26 @@ def _lookup_vin(vin: str, session: cffi_requests.Session) -> list[dict]:
         }
         try:
             r = session.post(HISTORY_URL, data=detail_data, timeout=15)
-            # Guard against another search's results being returned for this session
-            if vin not in r.text:
-                print(f"[inspection] {vin}: detail page is for a different VIN, skipping")
-                continue
-            odo = _OdometerParser()
-            odo.feed(r.text)
-            if odo.odometer:
-                results.append({"date": link["date"], "odometer": odo.odometer})
         except Exception:
+            return None
+        # Guard against another search's results being returned for this session
+        if vin not in r.text:
+            print(f"[inspection] {vin}: detail page is for a different VIN, skipping")
+            return None
+        odo = _OdometerParser()
+        odo.feed(r.text)
+        return odo.odometer
+
+    def year_of(link):
+        return link["date"].split("/")[-1].split(" ")[0][:4]
+
+    results, seen_years = [], set()
+    for link in parser.links[:10]:
+        if year_of(link) in seen_years or len(results) >= 5:
             continue
+        seen_years.add(year_of(link))
+        if odometer := fetch_odometer(link):
+            results.append({"date": link["date"], "odometer": odometer})
 
     return results
 
