@@ -222,6 +222,8 @@ def init_db():
             """)
 
         conn.execute("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS odo_rollback BOOLEAN DEFAULT FALSE")
+        # what the buyer pays if the current bid wins (bid + platform + yard fees), from Autura's live bids
+        conn.execute("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS buyer_total DOUBLE PRECISION")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_region_id ON vehicles (region_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")

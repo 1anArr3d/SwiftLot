@@ -4,7 +4,9 @@ export const SL = (() => {
   const money = n => n == null ? '—' : '$' + Math.round(n).toLocaleString();
   const miles = n => n == null ? '—' : Math.round(n).toLocaleString() + ' mi';
   const title = v => `${v.year} ${v.make} ${v.model}`;
-  const allIn = v => v.current_bid != null ? v.current_bid + (v.fee_price || 0) : null;
+  // what the buyer pays if the current bid wins: Autura's total from the live bid feed (bid + platform and yard fees)
+  const allIn = v => v.buyer_total ?? null;
+  const allInText = v => v.buyer_total != null ? money(v.buyer_total) : v.current_bid != null ? `${money(v.current_bid)} + fees` : '—';
 
   function timeLeft(iso) {
     const ms = new Date(iso) - Date.now();
@@ -47,5 +49,5 @@ export const SL = (() => {
     return `<svg class="${cls}" viewBox="0 0 ${s.w} ${s.h}" width="${s.w}" height="${s.h}" role="img" aria-label="Odometer readings">${lines}${dots}</svg>`;
   }
 
-  return { D, money, miles, title, allIn, timeLeft, verdict, bar, sparkSVG };
+  return { D, money, miles, title, allIn, allInText, timeLeft, verdict, bar, sparkSVG };
 })();

@@ -76,7 +76,7 @@ def _listing_to_vehicle_row(listing: dict) -> dict:
         "current_bid":        _cents(bidding.get("winningBid") or {}),
         "bid_expiration":     info.get("biddingEndUtc"),
         "reserve_price":      _cents(bidding.get("reservePrice") or {}),
-        "fee_price":          _cents(bidding.get("minBid") or {}),
+        "fee_price":          _cents(bidding.get("minBid") or {}),  # misnamed: Autura's minimum bid, not a fee
         "seller_notes":       details.get("notes"),
         "images":             json.dumps(thumb_urls),
         "images_count":       len(thumb_urls),
@@ -126,6 +126,9 @@ def _upsert_vehicle(conn, listing: dict):
              %(seller_notes)s, %(images)s, %(images_count)s, %(published_at)s,
              %(last_recorded_odo)s)
         ON CONFLICT (vin) DO UPDATE SET
+            -- the feed has no buyer total; keep the live one unless the bid has moved since
+            buyer_total     = CASE WHEN vehicles.current_bid IS DISTINCT FROM EXCLUDED.current_bid
+                                   THEN NULL ELSE vehicles.buyer_total END,
             auction_id      = EXCLUDED.auction_id,
             current_bid     = EXCLUDED.current_bid,
             bid_expiration  = EXCLUDED.bid_expiration,
@@ -250,11 +253,11 @@ def run_full_feed() -> dict:
         for listing in all_sold:
             _insert_sold(conn, listing)
 
-    # Ably subscriptions are lazy (subscribe-on-view, see auction_listener.py)
-    # and don't need reconciling against the full active set here — Autura's
-    # Ably setup caps out around 200 channels per connection, so proactively
-    # subscribing to the whole inventory doesn't scale.
     _handle_ended_vehicles(active_vins)
+
+    # follow live bids on every lot now in the table (new lots in, ended lots out)
+    from scrapers.autura import auction_listener as listener
+    listener.sync_subscriptions()
 
     print(f"[feed] Done: {len(all_active)} vehicles, {len(seen_sellers)} sellers, {len(all_sold)} sold")
     return {"vehicles": len(all_active), "sellers": len(seen_sellers), "sold": len(all_sold)}

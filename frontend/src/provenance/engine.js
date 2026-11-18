@@ -44,11 +44,11 @@ export const ENG = (() => {
     }
     paint(); hero(sel);
     // A live bid from the SSE feed: update the car, re-rank, flash its row
-    function bid(itemKey, amount, expires) {
+    function bid(itemKey, amount, expires, total) {
       const v = D.vehicles.find(x => x.item_key === itemKey); if (!v || amount == null) return;
-      if (v.current_bid === amount && (!expires || v.bid_expiration === expires)) return;
+      if (v.current_bid === amount && (!expires || v.bid_expiration === expires) && (total === undefined || v.buyer_total === total)) return;
       const before = ranked().indexOf(v);
-      v.current_bid = amount; if (expires) v.bid_expiration = expires;
+      v.current_bid = amount; if (expires) v.bid_expiration = expires; if (total !== undefined) v.buyer_total = total;
       const order = paint(), el = els.get(v); if (el.hidden) return;
       el.classList.remove('flash', 'up'); void el.offsetWidth; el.classList.add('flash');
       if (order.indexOf(v) < before) el.classList.add('up');

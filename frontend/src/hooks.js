@@ -60,12 +60,11 @@ export function useLiveBids(vehicles) {
       source = new EventSource(`${API}/stream/multi?auctions=${key}`);
       source.onmessage = (e) => {
         const msg = JSON.parse(e.data);
-        if (msg.type === 'bid') {
-          setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
-        } else if (msg.type === 'update') {
+        // the server sends a per-lot snapshot on connect and after every bid
+        if (msg.type === 'update') {
           setLiveBids(prev => {
             const next = { ...prev };
-            (msg.vehicles || []).forEach(v => { if (v.item_key) next[v.item_key] = { amount: v.current_bid, expires: v.bid_expiration }; });
+            (msg.vehicles || []).forEach(v => { if (v.item_key) next[v.item_key] = { amount: v.current_bid, expires: v.bid_expiration, total: v.buyer_total }; });
             return next;
           });
         }

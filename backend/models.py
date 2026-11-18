@@ -44,6 +44,7 @@ class Vehicle(BaseModel):
     published_at: Optional[str] = None
     last_recorded_odo: Optional[str] = None
     odo_rollback: Optional[bool] = False
+    buyer_total: Optional[float] = None
     seller_name: Optional[str] = None
     closes_at: Optional[str] = None
 

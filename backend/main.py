@@ -22,8 +22,7 @@ async def lifespan(app: FastAPI):
     init_db()
     listener.set_event_loop(asyncio.get_running_loop())
 
-    # Initial full scrape. Ably subscriptions are lazy (subscribe-on-view) —
-    # nothing to resubscribe at cold start since there are no SSE clients yet.
+    # Initial full scrape; it ends by subscribing every live lot to Ably (sync_subscriptions).
     def _startup():
         try:
             scraper.scrape_all()
@@ -44,7 +43,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"[inspection] Startup batch failed: {e}")
     threading.Thread(target=_startup, daemon=True).start()
-    listener.start_watchdog(interval=900)  # 15 min fallback safety net, not primary sync — see auction_listener.py
+    listener.start_watchdog(interval=300)  # keeps every live lot subscribed; see auction_listener.sync_subscriptions
     listener.start_periodic_scraper(interval=7200)
 
     def _sold_backfill():

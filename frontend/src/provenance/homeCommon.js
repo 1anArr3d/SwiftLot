@@ -5,14 +5,14 @@ import { HOLO } from './holo.js';
 import { every } from './life.js';
 // Shared content for the three Home directions: same hero certificate, deals and closing list; each page supplies its own card markup.
 export const HOME = (() => {
-  const { D, money, title, allIn, bar } = SL, { gap, gapText, ranked, deal, lot, clock } = ENG;
+  const { D, money, title, allIn, allInText, bar } = SL, { gap, gapText, ranked, deal, lot, clock } = ENG;
   const left = iso => { const ms = new Date(iso) - Date.now(), h = ms / 36e5; return h < 24 ? `${Math.floor(h)}h ${Math.floor(ms % 36e5 / 6e4)}m` : `${Math.floor(h / 24)}d ${Math.floor(h % 24)}h`; };
   const certHTML = v => { const b = bar(v); return `<article class="cert" id="heroCert">${(S=>`<div class="guil tile" style="background-image:${S.map(s=>s.img).join(',')};background-position:${S.map(s=>s.pos).join(',')};background-size:${S.map(s=>s.size).join(',')}"></div>`)(PAT.spots('#3f6b5c',v.vin,'value'))}${PAT.strip('value',v.vin,'VALUE')}
     <div class="c-head"><div><small>Certificate of lot value</small><h2>${title(v)}</h2></div><div class="no">Certificate no.<b>SL-${lot(v)}-${v.vin.slice(-6)}</b></div></div>
     <div class="c-body"><div class="photo"><img src="${v.images[0] || ''}" alt="${title(v)}"></div>
      <div><div class="field"><small>Current bid</small><div class="big u">${money(v.current_bid)}</div><span style="font-size:13px">${gapText(v)}</span></div>
       ${b ? `<div class="bandbar"><i style="left:${b.lo}%;width:${b.hi - b.lo}%"></i><b style="left:${b.bid}%"></b></div><div class="vlab"><span>Typical ${money(v.price.low)}–${money(v.price.high)}</span><span>${v.price.count} sales</span></div>` : ''}
-      <div class="field"><small>If you win now</small><b>${money(allIn(v))}</b></div></div></div>
+      <div class="field"><small>If you win now</small><b>${allInText(v)}</b></div></div></div>
     <div class="foot">${PAT.inkSeal('Market<br>value')}<a class="btn go" href="/auctions/${v.region_id}?vin=${v.vin}" style="display:inline-grid;place-items:center;text-decoration:none">Open certificate</a></div></article>`; };
   function render({ cert, trust, deals, ledger, tot, deal: dealCard, yard }) {
     const order = ranked().filter(v => deal(v) != null), A = D.auctions, lots = A.reduce((s, a) => s + a.vehicles_count, 0);

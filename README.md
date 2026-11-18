@@ -8,7 +8,7 @@ Live at [swift-lot.com](https://swift-lot.com)
 
 ## Features
 
-- **Real-time bid streaming** — backend subscribes to Autura's Ably WebSocket feed per vehicle lot; `NEW_BID` events carry the bid amount directly, so updates reach the frontend with zero extra HTTP calls. Subscriptions are lazy (subscribe only while someone's actually watching, unsubscribe when the last viewer leaves) since Autura's Ably connection caps out around 200 concurrent channels
+- **Real-time bid streaming** — backend subscribes to Autura's Ably WebSocket feed for every live lot, so `current_bid` is live on every page, not just open auctions. `NEW_BID` events carry the standing bid (`inventory.winningBid`, in cents) and the buyer's total including fees (`buyer_total`), so updates reach the frontend with zero extra HTTP calls. Autura's Ably fails attaches past ~200 channels per connection, so lots are spread over a pool of connections, 150 channels each (≈7 for ~1,000 lots)
 - **Single-pass feed scrape** — one paginated crawl of `mp.autura.com/auctions.data` returns vehicle details, bidding info, and seller info together; no per-auction or per-vehicle follow-up calls needed
 - **VIN-based lifecycle tracking** — a vehicle whose VIN drops out of the active feed is harvested (final sale price captured) and removed outright, instead of being flagged and left to accumulate
 - Discovers active auctions across all active sellers nationwide (no hardcoded state list)
@@ -48,8 +48,8 @@ backend/
     autura_api.py              # HTTP client — login, turbo-stream decoding, feed/seller pagination
     feed_scraper.py            # Single-pass feed scrape: upserts vehicles + sellers,
                                 #   detects ended vehicles (VIN diff), harvests sold prices
-    auction_listener.py        # Ably subscriptions (lazy, per-vehicle), SSE broadcast,
-                                #   watchdog resync against connected clients
+    auction_listener.py        # Ably subscriptions (every live lot, pooled connections), SSE broadcast,
+                                #   5-min resync against every live lot
     inspection_scraper.py       # Playwright session + HTTP batch fetch for TX odometer history
 
 frontend/
@@ -145,7 +145,7 @@ App at `http://localhost:5173`
 | POST | `/api/v1/garage/:vin` | Add vehicle to garage (auth required) |
 | DELETE | `/api/v1/garage/:vin` | Remove vehicle from garage (auth required) |
 | GET | `/api/v1/stream/multi?auctions=id1,id2` | Single SSE connection for multiple vehicle lots (garage/detail pages) |
-| GET | `/api/v1/health` | Ably connection state, active SSE clients, live subscriptions |
+| GET | `/api/v1/health` | Ably connections (channels + state each), subscribed lot count, active SSE clients |
 
 ## Deployment
 
