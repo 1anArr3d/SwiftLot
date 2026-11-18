@@ -8,7 +8,7 @@ and auction_discovery.py.
 import json
 from datetime import datetime, timezone
 from db import get_db, query
-from .autura_api import get_all_feed, get_all_sellers, get_seller_listings
+from .autura_api import get_all_feed, get_all_sellers, get_lot, get_bids
 
 
 # ── Parsing helpers ───────────────────────────────────────────────────────────
@@ -34,9 +34,21 @@ def _cents(obj: dict, key: str = "amountCents") -> float | None:
     return c / 100 if c is not None else None
 
 
-def _listing_to_vehicle_row(listing: dict) -> dict:
+FEE_KEYS = ("platformFeeRate", "minPlatformFeeAmount", "maxPlatformFeeAmount")
+
+
+def _fee_config(bidding: dict, seller_cfg: dict) -> dict:
+    """Autura's lookup order for the platform fee: the lot's own config, then the seller's. None = Autura's default."""
+    lot = bidding.get("platformFeeConfig") or {}
+    return {k: lot.get(k) if lot.get(k) is not None else seller_cfg.get(k) for k in FEE_KEYS}
+
+
+def _listing_to_vehicle_row(listing: dict, seller_cfg: dict | None = None) -> dict:
     details = listing.get("unitDetails") or {}
     bidding = listing.get("biddingInfo") or {}
+    fees    = _fee_config(bidding, seller_cfg or {})
+    card    = (bidding.get("paymentProcessingConfig") or {}).get("paymentProcessingFeeCardRate")
+    extra   = sum((f.get("amountCents") or f.get("amount") or 0) for f in (bidding.get("customFees") or []))
     info    = bidding.get("auctionInfo") or {}
     media   = listing.get("media") or {}
     photos  = media.get("allPhotos") or []
@@ -75,8 +87,17 @@ def _listing_to_vehicle_row(listing: dict) -> dict:
         "item_key":           details.get("unitListingId"),
         "current_bid":        _cents(bidding.get("winningBid") or {}),
         "bid_expiration":     info.get("biddingEndUtc"),
-        "reserve_price":      _cents(bidding.get("reservePrice") or {}),
-        "fee_price":          _cents(bidding.get("minBid") or {}),  # misnamed: Autura's minimum bid, not a fee
+        "min_bid":            _cents(bidding.get("minBid") or {}),
+        "reserve_met":        bidding.get("isReserveMet"),
+        "bidding_status":     bidding.get("biddingStatus"),
+        "bidding_start":      info.get("biddingStartUtc"),
+        "run_number":         listing.get("runNumber"),
+        # fee inputs; the frontend works out the buyer's total from these + the live bid (Autura's PriceBreakdownModel)
+        "platform_fee_rate":  fees["platformFeeRate"],
+        "platform_fee_min":   fees["minPlatformFeeAmount"] / 100 if fees["minPlatformFeeAmount"] is not None else None,
+        "platform_fee_max":   fees["maxPlatformFeeAmount"] / 100 if fees["maxPlatformFeeAmount"] is not None else None,
+        "card_fee_rate":      card,
+        "extra_fees":         extra / 100 if extra else None,
         "seller_notes":       details.get("notes"),
         "images":             json.dumps(thumb_urls),
         "images_count":       len(thumb_urls),
@@ -105,8 +126,8 @@ def _listing_to_seller_record(listing: dict) -> dict | None:
 
 # ── DB writes ─────────────────────────────────────────────────────────────────
 
-def _upsert_vehicle(conn, listing: dict):
-    row = _listing_to_vehicle_row(listing)
+def _upsert_vehicle(conn, listing: dict, seller_cfg: dict | None = None):
+    row = _listing_to_vehicle_row(listing, seller_cfg)
     if not row.get("vin"):
         return
     conn.execute(
@@ -115,24 +136,33 @@ def _upsert_vehicle(conn, listing: dict):
             (vin, year, make, model, body_type, color, key_status, catalytic_converter,
              start_status, engine_type, drivetrain, fuel_type, num_cylinders,
              documentation_type, auction_id, region_id, seller_id, item_id, item_key,
-             current_bid, bid_expiration, reserve_price, fee_price, seller_notes,
-             images, images_count, published_at, last_recorded_odo)
+             current_bid, bid_expiration, min_bid, reserve_met, bidding_status, bidding_start,
+             run_number, platform_fee_rate, platform_fee_min, platform_fee_max, card_fee_rate,
+             extra_fees, seller_notes, images, images_count, published_at, last_recorded_odo)
         VALUES
             (%(vin)s, %(year)s, %(make)s, %(model)s, %(body_type)s, %(color)s,
              %(key_status)s, %(catalytic_converter)s, %(start_status)s, %(engine_type)s,
              %(drivetrain)s, %(fuel_type)s, %(num_cylinders)s, %(documentation_type)s,
              %(auction_id)s, %(region_id)s, %(seller_id)s, %(item_id)s, %(item_key)s,
-             %(current_bid)s, %(bid_expiration)s, %(reserve_price)s, %(fee_price)s,
+             %(current_bid)s, %(bid_expiration)s, %(min_bid)s, %(reserve_met)s,
+             %(bidding_status)s, %(bidding_start)s, %(run_number)s, %(platform_fee_rate)s,
+             %(platform_fee_min)s, %(platform_fee_max)s, %(card_fee_rate)s, %(extra_fees)s,
              %(seller_notes)s, %(images)s, %(images_count)s, %(published_at)s,
              %(last_recorded_odo)s)
         ON CONFLICT (vin) DO UPDATE SET
-            -- the feed has no buyer total; keep the live one unless the bid has moved since
-            buyer_total     = CASE WHEN vehicles.current_bid IS DISTINCT FROM EXCLUDED.current_bid
-                                   THEN NULL ELSE vehicles.buyer_total END,
             auction_id      = EXCLUDED.auction_id,
             current_bid     = EXCLUDED.current_bid,
             bid_expiration  = EXCLUDED.bid_expiration,
-            reserve_price   = EXCLUDED.reserve_price,
+            min_bid         = EXCLUDED.min_bid,
+            reserve_met     = EXCLUDED.reserve_met,
+            bidding_status  = EXCLUDED.bidding_status,
+            bidding_start   = EXCLUDED.bidding_start,
+            run_number      = EXCLUDED.run_number,
+            platform_fee_rate = EXCLUDED.platform_fee_rate,
+            platform_fee_min  = EXCLUDED.platform_fee_min,
+            platform_fee_max  = EXCLUDED.platform_fee_max,
+            card_fee_rate   = EXCLUDED.card_fee_rate,
+            extra_fees      = EXCLUDED.extra_fees,
             images          = EXCLUDED.images,
             images_count    = EXCLUDED.images_count,
             published_at    = EXCLUDED.published_at,
@@ -140,7 +170,6 @@ def _upsert_vehicle(conn, listing: dict):
             item_id         = EXCLUDED.item_id,
             seller_id       = EXCLUDED.seller_id,
             region_id       = EXCLUDED.region_id,
-            fee_price       = EXCLUDED.fee_price,
             seller_notes    = EXCLUDED.seller_notes
         """,
         row,
@@ -226,6 +255,10 @@ def run_full_feed() -> dict:
     not auction_id.
     """
     all_active, all_sold = get_all_feed()
+    try:
+        _seller_cfgs.update({s["accountId"]: s["sellingConfig"] for s in get_all_sellers()})
+    except Exception as e:  # keep the last known configs (or Autura's defaults on a cold start)
+        print(f"[feed] seller fee configs unavailable: {e}")
 
     seen_sellers: set[str] = set()
     active_vins:  set[str] = set()
@@ -239,7 +272,7 @@ def run_full_feed() -> dict:
                 vin = (listing.get("unitDetails") or {}).get("vin")
                 if vin:
                     active_vins.add(vin)
-                _upsert_vehicle(conn, listing)
+                _upsert_vehicle(conn, listing, _seller_cfg(listing.get("accountId")))
 
                 record = _listing_to_seller_record(listing)
                 if record:
@@ -267,48 +300,6 @@ def run_full_feed() -> dict:
 scrape_all = run_full_feed
 
 
-def _harvest_sold_for_sellers(seller_ids: list[str]) -> dict:
-    """
-    Fetch + insert sold listings for the given sellers via get_seller_listings()
-    (sold listings are only visible via ?seller= filter, not the global feed).
-    Shared by the immediate per-ended-seller harvest in _handle_ended_vehicles()
-    and the periodic full-sweep run_sold_backfill() — same job, same code path,
-    just different scope and trigger.
-
-    Deliberately sequential, not parallelized: a burst of concurrent fresh
-    connections to Neon's serverless Postgres gets dropped/rejected (confirmed
-    by testing — "server closed the connection unexpectedly" under ~6 concurrent
-    getconn() calls). Slow is fine here; this only walks more than a couple
-    sellers on the rare full backlog sweep, not on the normal per-cycle path.
-    """
-    inserted = errors = 0
-    for seller_id in seller_ids:
-        try:
-            _, sold = get_seller_listings(seller_id)
-            with get_db() as conn:
-                for listing in sold:
-                    _insert_sold(conn, listing)
-                    inserted += 1
-        except Exception as e:
-            errors += 1
-            print(f"[sold-harvest] Fetch failed for seller {seller_id}: {e}")
-    return {"inserted": inserted, "errors": errors}
-
-
-def run_sold_backfill() -> dict:
-    """
-    Walk every seller and collect their sold listings into historical_sales.
-    Runs independently of the main feed scrape, in its own thread; safe to
-    call periodically as a catch-all for anything the immediate per-ended-seller
-    harvest missed.
-    """
-    sellers = get_all_sellers()
-    print(f"[sold-backfill] {len(sellers)} sellers to check")
-    result = _harvest_sold_for_sellers([s["accountId"] for s in sellers])
-    print(f"[sold-backfill] Done: {result['inserted']} inserted, {result['errors']} seller error(s)")
-    return result
-
-
 # ── Support functions ─────────────────────────────────────────────────────────
 
 def _handle_ended_vehicles(active_vins: set[str]):
@@ -319,31 +310,96 @@ def _handle_ended_vehicles(active_vins: set[str]):
     "ended" + unsubscribe its Ably channel, then drop the row — vehicles has
     no separate "completed" flag that can drift out of sync with reality.
     """
-    from scrapers.autura import auction_listener as listener
-
-    gone = query(
-        "SELECT vin, auction_id, region_id FROM vehicles WHERE NOT (vin = ANY(%s))",
-        (list(active_vins),),
-    )
+    gone = query(f"SELECT {_ENDED_COLS} FROM vehicles WHERE NOT (vin = ANY(%s))", (list(active_vins),))
     if not gone:
         return
-
-    print(f"[feed] {len(gone)} vehicle(s) no longer in feed — harvesting + removing")
-
-    seller_ids = list({r["region_id"] for r in gone if r["region_id"]})
-    if seller_ids:
-        result = _harvest_sold_for_sellers(seller_ids)
-        print(f"[feed] Sold harvest: {result['inserted']} listing(s) for {len(seller_ids)} affected seller(s)")
-
-    with get_db() as conn:
-        for row in gone:
-            conn.execute("DELETE FROM vehicles WHERE vin = %s", (row["vin"],))
-
+    print(f"[feed] {len(gone)} vehicle(s) no longer in feed — recording final bids + removing")
     for row in gone:
+        _record_final_bid(row)
+    _remove_vehicles(gone)
+    print(f"[feed] Removed {len(gone)} ended vehicle(s)")
+
+
+_ENDED_COLS = "vin, auction_id, region_id, seller_id, year, make, model, color, key_status, reserve_met"
+
+
+def _record_final_bid(row):
+    """
+    Ended lots vanish from Autura's feed and lot page, but /bids-history still answers: its top bid is the sale price.
+    Only kept when the reserve was met (otherwise the lot went unsold). Replaces the old weekly per-seller sold sweep.
+    """
+    if not row["seller_id"] or not row["auction_id"] or row["reserve_met"] is False:
+        return
+    try:
+        bids = get_bids(row["seller_id"], row["auction_id"]).get("bids") or []
+    except Exception as e:
+        print(f"[feed] bid history unavailable for {row['vin']}: {e}")
+        return
+    top = max(bids, key=lambda b: b.get("bidAmount") or 0, default=None)
+    if not top or not top.get("bidAmount"):
+        return
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO historical_sales
+                (vin, year, make, model, color, key_status, region_id, auction_id, final_sale, fees_total, sold_at, source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'autura_mp')
+            ON CONFLICT (vin, auction_id) DO NOTHING
+            """,
+            (row["vin"], row["year"], row["make"], row["model"], row["color"], row["key_status"], row["region_id"],
+             row["auction_id"], top["bidAmount"] / 100, (top.get("totalAmount") or 0) / 100 or None, top.get("createdAt")),
+        )
+
+
+def _remove_vehicles(rows):
+    """Drop ended lots, tell open pages, stop following their bids."""
+    from scrapers.autura import auction_listener as listener
+    with get_db() as conn:
+        for row in rows:
+            conn.execute("DELETE FROM vehicles WHERE vin = %s", (row["vin"],))
+    for row in rows:
         if row["auction_id"]:
             listener._broadcast(row["auction_id"], {"type": "ended", "auction_id": row["auction_id"]})
             listener.unsubscribe_auction(row["auction_id"])
 
-    print(f"[feed] Removed {len(gone)} ended vehicle(s)")
+
+def refresh_lot(auction_id: str):
+    """
+    Re-read one lot from Autura (triggered by its AUCTION_UPDATED message). Still for sale: update the row.
+    Sold or pulled: record the sale and remove it now instead of at the next full scrape.
+    """
+    row = query(f"SELECT {_ENDED_COLS}, item_key FROM vehicles WHERE auction_id = %s", (auction_id,), one=True)
+    if not row or not row["item_key"]:
+        return
+    lot = get_lot(row["item_key"])
+    if not lot:  # Autura drops a lot's page as soon as it ends
+        _record_final_bid(row)
+        _remove_vehicles([row])
+        print(f"[feed] {row['vin']} ended (page gone), removed")
+        return
+    if lot.get("status") == "PUBLISHED":
+        with get_db() as conn:
+            _upsert_vehicle(conn, lot, _seller_cfg(lot.get("accountId")))
+        return
+    with get_db() as conn:
+        _insert_sold(conn, lot)  # no-op without a winning bid (unsold / pulled)
+    _remove_vehicles([row])
+    print(f"[feed] {row['vin']} ended ({lot.get('status')}), removed")
+
+
+def refresh_live_lots() -> int:
+    """Re-read only the lots in their live bidding hour: reserve status, phase and end time move fastest there."""
+    live, _ = get_all_feed(auction_status="LIVE_BIDDING")
+    with get_db() as conn:
+        for listing in live:
+            _upsert_vehicle(conn, listing, _seller_cfg(listing.get("accountId")))
+    return len(live)
+
+
+_seller_cfgs: dict = {}  # accountId -> sellingConfig, refreshed by each full scrape
+
+
+def _seller_cfg(account_id):
+    return _seller_cfgs.get(account_id)
 
 

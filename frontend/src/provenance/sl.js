@@ -4,9 +4,26 @@ export const SL = (() => {
   const money = n => n == null ? '—' : '$' + Math.round(n).toLocaleString();
   const miles = n => n == null ? '—' : Math.round(n).toLocaleString() + ' mi';
   const title = v => `${v.year} ${v.make} ${v.model}`;
-  // what the buyer pays if the current bid wins: Autura's total from the live bid feed (bid + platform and yard fees)
-  const allIn = v => v.buyer_total ?? null;
-  const allInText = v => v.buyer_total != null ? money(v.buyer_total) : v.current_bid != null ? `${money(v.current_bid)} + fees` : '—';
+  // What the buyer pays if the current bid wins, by Autura's own PriceBreakdownModel (verified against 300+ real bids):
+  // platform fee = bid x rate (12.5% unless the lot/seller sets one), clamped to min/max ($950 default cap);
+  // card processing = 3% of bid + platform + extra fees, rounded up. Key/storage/doc fees are inside the bid.
+  const allIn = v => {
+    if (v.current_bid == null) return null;
+    const bid = Math.round(v.current_bid * 100), extra = Math.round((v.extra_fees || 0) * 100);
+    let plat = Math.round(bid * (v.platform_fee_rate ?? 0.125));
+    if (v.platform_fee_min != null) plat = Math.max(plat, Math.round(v.platform_fee_min * 100));
+    plat = Math.min(plat, Math.round((v.platform_fee_max ?? 950) * 100));
+    const card = Math.ceil((bid + plat + extra) * (v.card_fee_rate ?? 0.03));
+    return (bid + plat + extra + card) / 100;
+  };
+  // Plain-language notes about how this lot is selling, from fields Autura sends with every listing
+  const lotNotes = v => [
+    v.reserve_met === false && "Reserve not met: the yard can turn down the top bid.",
+    ['BIDDING', 'ENDING_SOON'].includes(v.bidding_status) ? 'Live bidding now.'
+      : v.bidding_status === 'PRE_BID' && new Date(v.bidding_start) > Date.now() && `Pre-bidding. Live bidding opens in ${timeLeft(v.bidding_start)}.`,
+    v.run_number > 1 && `Relisted: this is its ${v.run_number === 2 ? 'second' : v.run_number === 3 ? 'third' : v.run_number + 'th'} time up for auction.`,
+  ].filter(Boolean);
+  const allInText = v => allIn(v) == null ? '—' : '$' + allIn(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   function timeLeft(iso) {
     const ms = new Date(iso) - Date.now();
@@ -49,5 +66,5 @@ export const SL = (() => {
     return `<svg class="${cls}" viewBox="0 0 ${s.w} ${s.h}" width="${s.w}" height="${s.h}" role="img" aria-label="Odometer readings">${lines}${dots}</svg>`;
   }
 
-  return { D, money, miles, title, allIn, allInText, timeLeft, verdict, bar, sparkSVG };
+  return { D, money, miles, title, allIn, allInText, lotNotes, timeLeft, verdict, bar, sparkSVG };
 })();

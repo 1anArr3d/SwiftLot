@@ -21,7 +21,7 @@ export default function AuctionDetailPage() {
   const { opts, error: saveError } = useGarageOpts(handle);
   const live = useLiveBids(data?.raw || []);
   useEffect(() => {
-    Object.entries(live).forEach(([k, b]) => handle.current?.bid(k, b.amount, b.expires, b.total));
+    Object.entries(live).forEach(([k, b]) => handle.current?.bid(k, b.amount, b.expires));
   }, [live]);
 
   if (error) return <Printing title="Couldn't load this sale" error="Check your connection, then try again." />;

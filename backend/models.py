@@ -36,15 +36,22 @@ class Vehicle(BaseModel):
     item_key: Optional[str] = None
     current_bid: Optional[float] = None
     bid_expiration: Optional[str] = None
-    reserve_price: Optional[float] = None
-    fee_price: Optional[float] = None
+    min_bid: Optional[float] = None
+    reserve_met: Optional[bool] = None
+    bidding_status: Optional[str] = None
+    bidding_start: Optional[str] = None
+    run_number: Optional[int] = None
+    platform_fee_rate: Optional[float] = None
+    platform_fee_min: Optional[float] = None
+    platform_fee_max: Optional[float] = None
+    card_fee_rate: Optional[float] = None
+    extra_fees: Optional[float] = None
     seller_notes: Optional[str] = None
     images: Optional[str] = None
     images_count: Optional[int] = None
     published_at: Optional[str] = None
     last_recorded_odo: Optional[str] = None
     odo_rollback: Optional[bool] = False
-    buyer_total: Optional[float] = None
     seller_name: Optional[str] = None
     closes_at: Optional[str] = None
 

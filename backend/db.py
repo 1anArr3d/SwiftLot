@@ -137,8 +137,16 @@ def init_db():
             item_key           TEXT,
             current_bid        DOUBLE PRECISION,
             bid_expiration     TEXT,
-            reserve_price      DOUBLE PRECISION,
-            fee_price          DOUBLE PRECISION,
+            min_bid            DOUBLE PRECISION,
+            reserve_met        BOOLEAN,
+            bidding_status     TEXT,
+            bidding_start      TEXT,
+            run_number         INTEGER,
+            platform_fee_rate  DOUBLE PRECISION,
+            platform_fee_min   DOUBLE PRECISION,
+            platform_fee_max   DOUBLE PRECISION,
+            card_fee_rate      DOUBLE PRECISION,
+            extra_fees         DOUBLE PRECISION,
             seller_notes       TEXT,
             images             TEXT,
             images_count       INTEGER,
@@ -176,8 +184,7 @@ def init_db():
             item_key           TEXT,
             current_bid        DOUBLE PRECISION,
             bid_expiration     TEXT,
-            reserve_price      DOUBLE PRECISION,
-            fee_price          DOUBLE PRECISION,
+            min_bid            DOUBLE PRECISION,
             images             TEXT,
             images_count       INTEGER,
             last_recorded_odo  TEXT,
@@ -222,8 +229,19 @@ def init_db():
             """)
 
         conn.execute("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS odo_rollback BOOLEAN DEFAULT FALSE")
-        # what the buyer pays if the current bid wins (bid + platform + yard fees), from Autura's live bids
-        conn.execute("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS buyer_total DOUBLE PRECISION")
+        # fee_price always held Autura's minimum bid; reserve_price was never sent (Autura hides it, only reserve_met);
+        # buyer_total is now worked out from the fee inputs below instead of captured from live bids
+        for table in ("vehicles", "garage"):
+            conn.execute(f"""DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = '{table}' AND column_name = 'fee_price')
+                THEN ALTER TABLE {table} RENAME COLUMN fee_price TO min_bid; END IF; END $$""")
+            conn.execute(f"ALTER TABLE {table} DROP COLUMN IF EXISTS reserve_price")
+        conn.execute("ALTER TABLE vehicles DROP COLUMN IF EXISTS buyer_total")
+        for col, typ in (("reserve_met", "BOOLEAN"), ("bidding_status", "TEXT"), ("bidding_start", "TEXT"),
+                         ("run_number", "INTEGER"), ("platform_fee_rate", "DOUBLE PRECISION"),
+                         ("platform_fee_min", "DOUBLE PRECISION"), ("platform_fee_max", "DOUBLE PRECISION"),
+                         ("card_fee_rate", "DOUBLE PRECISION"), ("extra_fees", "DOUBLE PRECISION")):
+            conn.execute(f"ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS {col} {typ}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_region_id ON vehicles (region_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_item_key ON vehicles (item_key)")

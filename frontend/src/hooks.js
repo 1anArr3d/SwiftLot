@@ -64,7 +64,7 @@ export function useLiveBids(vehicles) {
         if (msg.type === 'update') {
           setLiveBids(prev => {
             const next = { ...prev };
-            (msg.vehicles || []).forEach(v => { if (v.item_key) next[v.item_key] = { amount: v.current_bid, expires: v.bid_expiration, total: v.buyer_total }; });
+            (msg.vehicles || []).forEach(v => { if (v.item_key) next[v.item_key] = { amount: v.current_bid, expires: v.bid_expiration }; });
             return next;
           });
         }

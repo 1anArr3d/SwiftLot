@@ -1,8 +1,11 @@
 """
 Auction update listener — mp.autura.com via Ably WebSocket.
 
-Subscribes to public:auction:{auctionId}:updates for EVERY live lot, so current_bid stays live
-on every page (Home, Search, Garage), not only while someone has the auction open.
+Subscribes to public:auction:{auctionId}:updates for every lot that is in, or within
+SUBSCRIBE_WINDOW_HOURS of, its live bidding hour (plus any lot someone has open), so current_bid
+stays live where the bidding actually happens. Pre-bid lots further out are refreshed by the
+half-hourly full scrape. AUCTION_UPDATED (Autura's "this lot changed" ping) re-reads that one lot,
+so sold/pulled lots disappear within seconds.
 Autura's Ably setup fails attaches past ~200 channels per connection, so channels are spread
 over a pool of connections, CHANNELS_PER_CONNECTION each.
 NEW_BID messages carry the full bid payload — parse directly, no API call needed.
@@ -24,6 +27,7 @@ CHANNEL_SUFFIX = ":updates"
 
 _event_loop: asyncio.AbstractEventLoop | None = None
 CHANNELS_PER_CONNECTION = 150  # headroom under the ~200 per-connection ceiling
+SUBSCRIBE_WINDOW_HOURS  = 3    # follow lots whose live hour starts within this many hours
 
 _clients:       dict[str, list]  = {}   # auction_id → list[asyncio.Queue]
 _subscriptions: dict[str, tuple] = {}   # auction_id → (Ably channel, its pool entry)
@@ -82,7 +86,7 @@ def _channel_name(auction_id: str) -> str:
 
 def _vehicle_snapshot(auction_id: str) -> dict:
     rows = query(
-        "SELECT item_key, current_bid, buyer_total, bid_expiration FROM vehicles WHERE auction_id = %s",
+        "SELECT item_key, current_bid, bid_expiration FROM vehicles WHERE auction_id = %s",
         (auction_id,),
     )
     return {
@@ -92,7 +96,6 @@ def _vehicle_snapshot(auction_id: str) -> dict:
             {
                 "item_key":       r["item_key"],
                 "current_bid":    r["current_bid"],
-                "buyer_total":    r["buyer_total"],
                 "bid_expiration": r["bid_expiration"],
             }
             for r in rows
@@ -101,19 +104,46 @@ def _vehicle_snapshot(auction_id: str) -> dict:
 
 
 def parse_bid(data: dict):
-    """NEW_BID payload -> (current bid $, buyer total $ or None, bidding_end_at or None), or None.
+    """NEW_BID payload -> (current bid $, bidding_end_at or None), or None. The buyer's total is worked out
+    from the bid by the frontend (Autura's own fee formula), so the payload's total_amount isn't needed.
     `bid` is the bid just placed, which a proxy (max) bid may beat in the same instant; the two
     NEW_BIDs can then land in either order, so the standing bid comes from inventory.winningBid.
     Amounts are cents (verified 2026-11-18 against live bids: 40000 = $400, platform_fee 5000 = $50)."""
     bid = data.get('bid') or {}
     winning = (data.get('inventory') or {}).get('winningBid') or bid
-    cents, total = winning.get('bid_amount'), winning.get('total_amount')
+    cents = winning.get('bid_amount')
     if cents is None:
         return None
-    return cents / 100, (total / 100 if total is not None else None), (bid.get('auction') or {}).get('bidding_end_at')
+    return cents / 100, (bid.get('auction') or {}).get('bidding_end_at')
+
+
+_refreshing: set[str] = set()
+
+
+def _refresh_lot(auction_id: str):
+    """Re-read one lot off the event loop; one at a time per lot, since a burst of pings needs one read."""
+    with _lock:
+        if auction_id in _refreshing:
+            return
+        _refreshing.add(auction_id)
+    def run():
+        try:
+            from .feed_scraper import refresh_lot
+            refresh_lot(auction_id)
+            _broadcast(auction_id, _vehicle_snapshot(auction_id))
+        except Exception:
+            logger.exception("Lot refresh failed for auction %s", auction_id)
+        finally:
+            with _lock:
+                _refreshing.discard(auction_id)
+    threading.Thread(target=run, daemon=True).start()
 
 
 async def _on_update(auction_id: str, message):
+    if getattr(message, 'name', None) != 'NEW_BID':
+        # AUCTION_UPDATED carries only {auction_id, event_created_at}; Autura's own site re-reads the lot too
+        _refresh_lot(auction_id)
+        return
     try:
         raw = getattr(message, 'data', None)
         if not raw:
@@ -123,20 +153,19 @@ async def _on_update(auction_id: str, message):
         parsed = parse_bid(data)
         if not parsed:
             return
-        bid_amount, buyer_total, bid_expiration = parsed
+        bid_amount, bid_expiration = parsed
 
         with get_db() as conn:
             conn.execute(
                 """UPDATE vehicles
                    SET current_bid    = %s,
-                       buyer_total    = %s,
                        bid_expiration = COALESCE(%s, bid_expiration)
                    WHERE auction_id = %s""",
-                (bid_amount, buyer_total, bid_expiration, auction_id),
+                (bid_amount, bid_expiration, auction_id),
             )
 
         _broadcast(auction_id, _vehicle_snapshot(auction_id))
-        logger.info("auction %s: bid → $%.2f (buyer pays $%s)", auction_id, bid_amount, buyer_total)
+        logger.info("auction %s: bid → $%.2f", auction_id, bid_amount)
     except Exception:
         logger.exception("Error handling NEW_BID for auction %s", auction_id)
 
@@ -203,11 +232,15 @@ def unsubscribe_auction(auction_id: str):
 
 def sync_subscriptions():
     """
-    Subscribe every live lot (every auction_id still in vehicles) and drop lots that have ended.
+    Subscribe lots that are live or about to be (see SUBSCRIBE_WINDOW_HOURS) and drop the rest.
     Runs after each full feed scrape and on the watchdog, which also re-attaches anything whose
     subscribe failed or whose connection dropped.
     """
-    live = {r["auction_id"] for r in query("SELECT DISTINCT auction_id FROM vehicles WHERE auction_id IS NOT NULL")}
+    live = {r["auction_id"] for r in query(
+        """SELECT DISTINCT auction_id FROM vehicles WHERE auction_id IS NOT NULL
+           AND (bidding_start IS NULL OR bidding_status IS DISTINCT FROM 'PRE_BID'
+                OR bidding_start::timestamptz < NOW() + make_interval(hours => %s))""",
+        (SUBSCRIBE_WINDOW_HOURS,))}
     live |= {aid for aid, qs in _clients.items() if qs}
     for auction_id in live - set(_subscriptions):
         subscribe_auction(auction_id)
@@ -227,7 +260,22 @@ def start_watchdog(interval: int = 300):
     threading.Thread(target=_run, daemon=True, name="update-watchdog").start()
 
 
-def start_periodic_scraper(interval: int = 7200):
+def start_live_refresher(interval: int = 180):
+    """Re-reads the lots in their live hour every `interval` seconds (reserve status, phase, end time)."""
+    def _run():
+        while True:
+            threading.Event().wait(interval)
+            try:
+                from .feed_scraper import refresh_live_lots
+                n = refresh_live_lots()
+                if n:
+                    logger.info("Live refresher: %d lot(s) in their live hour", n)
+            except Exception:
+                logger.exception("Live refresher failed")
+    threading.Thread(target=_run, daemon=True, name="live-refresher").start()
+
+
+def start_periodic_scraper(interval: int = 1800):
     """Full feed rescrape every N seconds."""
     def _run():
         while True:

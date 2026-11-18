@@ -114,32 +114,17 @@ def _fetch_flat(url: str) -> list:
 def get_all_sellers() -> list[dict]:
     """
     Fetch the full seller registry from /sellers.data.
-    Returns list of dicts with accountId and accountName.
+    Returns list of dicts with accountId, accountName and sellingConfig (platform fee overrides, may be empty).
     """
     flat = _fetch_flat(f"{BASE_URL}/sellers.data?_routes=routes%2Fsellers")
     root = _decode(flat, flat[0])
     data = (root.get("routes/sellers") or {}).get("data") or {}
     sellers_raw = data.get("sellers") or []
     return [
-        {"accountId": s["accountId"], "accountName": s["accountName"]}
+        {"accountId": s["accountId"], "accountName": s["accountName"], "sellingConfig": s.get("sellingConfig") or {}}
         for s in sellers_raw
         if s and s.get("accountId") and s.get("accountName")
     ]
-
-
-def get_listings_page(page: int = 1, seller: str = None) -> dict:
-    """
-    Fetch one page of active inventory from mp.autura.com/auctions.data.
-    Returns decoded dict with keys: unitListings, soldUnitListings, total, page, perPage.
-    Pass seller=accountId to filter to a single seller.
-    """
-    url = f"{BASE_URL}/auctions.data?page={page}"
-    if seller:
-        url += f"&seller={seller}"
-    flat = _fetch_flat(url)
-    root = _decode(flat, flat[0])
-    route_data = (root.get("pages/auctionsRoute/AuctionsRoute") or {}).get("data") or {}
-    return route_data.get("data") or {}
 
 
 def get_all_listings() -> list[dict]:
@@ -148,13 +133,14 @@ def get_all_listings() -> list[dict]:
     return active
 
 
-def get_all_feed() -> tuple[list[dict], list[dict]]:
+def get_all_feed(**filters) -> tuple[list[dict], list[dict]]:
     """
     Fetch all US listings using a central zip code with a large radius.
-    One call covers the entire continental US.
+    One call covers the entire continental US. `filters` are Autura's own search params,
+    e.g. auction_status="LIVE_BIDDING" for only the lots in their live hour.
     """
     # Liberal, KS — geographic center of the contiguous US
-    base = f"{BASE_URL}/auctions.data?distance=2000&zipCode=67901"
+    base = f"{BASE_URL}/auctions.data?distance=2000&zipCode=67901" + "".join(f"&{k}={v}" for k, v in filters.items())
 
     first_flat = _fetch_flat(f"{base}&page=1")
     first_root = _decode(first_flat, first_flat[0])
@@ -181,41 +167,15 @@ def get_all_feed() -> tuple[list[dict], list[dict]]:
 
 
 
-def get_seller_listings(account_id: str) -> tuple[list[dict], list[dict]]:
-    """
-    Fetch active + sold listings for a single seller via ?seller= filter.
-    Paginates until both lists stop growing (total=0 for sold-only sellers).
-    Returns (active_listings, sold_listings).
-    """
-    first = get_listings_page(1, seller=account_id)
-    per_page = first.get("perPage") or 12
-    active = list(first.get("unitListings") or [])
-    sold = list(first.get("soldUnitListings") or [])
+def get_lot(unit_listing_id: str) -> dict | None:
+    """One listing as its lot page loads it (same shape as a feed listing), or None if Autura no longer serves it."""
+    route = "pages/bidderViewUnitListing/BidderViewUnitListing"
+    flat = _fetch_flat(f"{BASE_URL}/auctions/listings/{unit_listing_id}.data?_routes={route}")
+    return (((_decode(flat, flat[0]).get(route) or {}).get("data")) or {}).get("unitListing")
 
-    # Use total for active pages; fall back to response-size check for sold-only sellers
-    total = first.get("total") or 0
-    total_pages = max(1, math.ceil(total / per_page)) if per_page else 1
 
-    seen_vins: set[str] = set()
-    for lst in (active, sold):
-        for l in lst:
-            v = (l.get("unitDetails") or {}).get("vin")
-            if v:
-                seen_vins.add(v)
-
-    p = 2
-    while p <= max(total_pages, 1) + 1:
-        page_data = get_listings_page(p, seller=account_id)
-        new_active = page_data.get("unitListings") or []
-        new_sold = page_data.get("soldUnitListings") or []
-        if not new_active and not new_sold:
-            break
-        new_vins = {(l.get("unitDetails") or {}).get("vin") for l in new_active + new_sold} - {None}
-        if new_vins and new_vins.issubset(seen_vins):
-            break  # API cycling — same items returned again
-        seen_vins.update(new_vins)
-        active.extend(new_active)
-        sold.extend(new_sold)
-        p += 1
-
-    return active, sold
+def get_bids(seller_account_id: str, auction_id: str, per_page: int = 100) -> dict:
+    """Bid history for one lot: {"bids": [...], "total": n}. Amounts in cents. Contains bidder initials/email hints."""
+    resp = _authed_get(f"{BASE_URL}/bids-history?unit_account_id={seller_account_id}&auction_id={auction_id}&page=1&per_page={per_page}", timeout=20)
+    resp.raise_for_status()
+    return resp.json()

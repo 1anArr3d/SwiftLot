@@ -16,7 +16,7 @@ export default function AboutPage() {
           <h2>Odometer</h2>
           <p>For Texas cars we pull state inspection records for the VIN. A drop of more than 2,000 miles between readings flags a possible rollback. A single reading that looks like a typo is ignored, so one bad entry doesn't flag an honest car.</p>
           <h2>Vehicle</h2>
-          <p>Make, model, year and condition notes come straight from the yard's listing. "If you win now" is what Autura says the buyer pays if the current bid wins: the bid plus its platform fee and any yard fees. Until a live bid comes in, we show the bid plus fees.</p>
+          <p>Make, model, year and condition notes come straight from the yard's listing. "If you win now" is what you'd pay Autura if the current bid wins, worked out the same way Autura's checkout does it: the bid, plus the yard's platform fee (usually 12.5%), any extra yard fees, and the 3% card processing fee.</p>
           <h2>What we can't tell you</h2>
           <ul>
             <li>Mechanical condition — inspect in person when the yard allows it.</li>

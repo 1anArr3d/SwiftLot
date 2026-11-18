@@ -14,11 +14,20 @@ def msg(bid, winning=None, winning_total=None):
     return d
 
 CASES = [
-    ("proxy beat the placed bid: standing bid wins", msg(40000, 42500, 47813), (425.0, 478.13, END)),
-    ("placed bid is the winning bid",               msg(60000, 60000, 67500), (600.0, 675.0, END)),
-    ("no inventory: fall back to the placed bid",   msg(50000),               (500.0, 562.5, END)),
+    ("proxy beat the placed bid: standing bid wins", msg(40000, 42500, 47813), (425.0, END)),
+    ("placed bid is the winning bid",               msg(60000, 60000, 67500), (600.0, END)),
+    ("no inventory: fall back to the placed bid",   msg(50000),               (500.0, END)),
     ("no amount at all",                            {"bid": {}},              None),
 ]
 for label, data, expected in CASES:
     assert parse_bid(data) == expected, (label, parse_bid(data))
 print(f"ok: {len(CASES)} cases")
+
+# Anything that isn't a bid (AUCTION_UPDATED) re-reads the lot instead of being parsed as one
+import asyncio
+from scrapers.autura import auction_listener as L
+seen = []
+L._refresh_lot = seen.append
+asyncio.run(L._on_update("A1", types.SimpleNamespace(name="AUCTION_UPDATED", data={"auction_id": "A1"})))
+assert seen == ["A1"], seen
+print("ok: AUCTION_UPDATED -> lot refresh")

@@ -9,7 +9,6 @@ from config import ALLOWED_ORIGINS
 import threading
 from db import init_db
 from scrapers.autura import feed_scraper as scraper
-from scrapers.autura.feed_scraper import run_sold_backfill
 from routes import router
 from scrapers.autura import auction_listener as listener
 import asyncio
@@ -44,16 +43,8 @@ async def lifespan(app: FastAPI):
             print(f"[inspection] Startup batch failed: {e}")
     threading.Thread(target=_startup, daemon=True).start()
     listener.start_watchdog(interval=300)  # keeps every live lot subscribed; see auction_listener.sync_subscriptions
-    listener.start_periodic_scraper(interval=7200)
-
-    def _sold_backfill():
-        while True:
-            try:
-                run_sold_backfill()
-            except Exception as e:
-                print(f"[sold-backfill] Failed: {e}")
-            threading.Event().wait(604800)   # weekly catch-all
-    threading.Thread(target=_sold_backfill, daemon=True, name="sold-backfill").start()
+    listener.start_periodic_scraper(interval=1800)  # new lots + pre-bid changes; ended lots go sooner via AUCTION_UPDATED
+    listener.start_live_refresher(interval=180)
 
     yield
 

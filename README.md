@@ -8,9 +8,11 @@ Live at [swift-lot.com](https://swift-lot.com)
 
 ## Features
 
-- **Real-time bid streaming** — backend subscribes to Autura's Ably WebSocket feed for every live lot, so `current_bid` is live on every page, not just open auctions. `NEW_BID` events carry the standing bid (`inventory.winningBid`, in cents) and the buyer's total including fees (`buyer_total`), so updates reach the frontend with zero extra HTTP calls. Autura's Ably fails attaches past ~200 channels per connection, so lots are spread over a pool of connections, 150 channels each (≈7 for ~1,000 lots)
+- **Bid history** — `GET /api/v1/vehicles/{vin}/bids` returns a lot's bids (amount and time only, cached 30s) from Autura's bid history; the lot certificate plots it.
+- **Lot status** — reserve met/not met, pre-bid vs live phase and relist count come from the feed (`reserve_met`, `bidding_status`, `bidding_start`, `run_number`). `backend/tools/autura_findings_test.py` re-checks these and the fee formula against the live site; `backend/tools/autura_recon.py` records what Autura's site talks to (read-only).
+- **Real-time bid streaming** — backend subscribes to Autura's Ably WebSocket feed for every lot that is live or within 3 hours of its live hour (where nearly all bidding happens), so `current_bid` is live on every page, not just open auctions. `NEW_BID` events carry the standing bid (`inventory.winningBid`, in cents), so updates reach the frontend with zero extra HTTP calls. The buyer's all-in price is worked out in the frontend from that bid with Autura's own fee formula (platform fee per lot/seller from `/sellers`, 3% card processing), stored per lot as `platform_fee_*`, `card_fee_rate` and `extra_fees`. Autura's Ably fails attaches past ~200 channels per connection, so lots are spread over a pool of connections, 150 channels each (fewer than the ≈7 needed to cover all ~1,000 lots)
 - **Single-pass feed scrape** — one paginated crawl of `mp.autura.com/auctions.data` returns vehicle details, bidding info, and seller info together; no per-auction or per-vehicle follow-up calls needed
-- **VIN-based lifecycle tracking** — a vehicle whose VIN drops out of the active feed is harvested (final sale price captured) and removed outright, instead of being flagged and left to accumulate
+- **VIN-based lifecycle tracking** — a vehicle whose VIN drops out of the active feed has its final price read from Autura's bid history (kept when the reserve was met) and is removed outright, instead of being flagged and left to accumulate
 - Discovers active auctions across all active sellers nationwide (no hardcoded state list)
 - Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then fetches up to 5 years of odometer readings per VIN via authenticated HTTP
 - **Odometer rollback detection** — flags a vehicle when a newer inspection records more than 2,000 fewer miles than an older one, ignoring single out-of-line readings (inspector typos); shown as a "Possible rollback" badge
@@ -47,9 +49,9 @@ backend/
   scrapers/autura/
     autura_api.py              # HTTP client — login, turbo-stream decoding, feed/seller pagination
     feed_scraper.py            # Single-pass feed scrape: upserts vehicles + sellers,
-                                #   detects ended vehicles (VIN diff), harvests sold prices
-    auction_listener.py        # Ably subscriptions (every live lot, pooled connections), SSE broadcast,
-                                #   5-min resync against every live lot
+                                #   detects ended vehicles (VIN diff), records final bids
+    auction_listener.py        # Ably subscriptions (lots live or about to be, pooled connections), SSE broadcast,
+                                #   AUCTION_UPDATED -> lot re-read, 5-min resync, 3-min live-lot refresh
     inspection_scraper.py       # Playwright session + HTTP batch fetch for TX odometer history
 
 frontend/
@@ -120,7 +122,7 @@ python main.py
 - API: `http://127.0.0.1:8000`
 - Swagger docs: `http://127.0.0.1:8000/docs`
 - Hot reload is enabled — no restart needed on code changes
-- On startup it runs a full feed scrape in the background, plus a periodic rescrape every 2 hours and a weekly sold-listing sweep
+- On startup it runs a full feed scrape in the background, then rescrapes every 30 minutes (new lots, pre-bid changes) and re-reads lots in their live hour every 3 minutes (reserve, phase, end time). The sale price of each ended lot comes from its bid history. Autura's `AUCTION_UPDATED` ping re-reads that one lot, so sold or pulled lots leave within seconds and their sale is recorded straight away. Ably subscriptions cover lots that are live or within 3 hours of their live hour, plus any lot someone has open
 
 ### Frontend
 
@@ -160,4 +162,3 @@ App at `http://localhost:5173`
 - "Safety Only" inspection pages label the reading `Odometer Reading` rather than `Odometer`; 97% of them have one, so they are not skipped
 - The systemd service uses `xvfb-run --auto-servernum` — no manual Xvfb setup needed
 - Ably's `auth_url` requires the same session cookies as the scraping client (Autura gates `/ably-auth`), so the realtime client forwards them explicitly — a fresh/unauthenticated request to `auth_url` gets a 403
-- Sold-listing harvest runs sequentially, deliberately not parallelized — Neon's serverless Postgres drops connections under a burst of concurrent new ones

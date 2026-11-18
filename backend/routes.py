@@ -121,6 +121,37 @@ def search_vehicles(
 
 # ── Historical Sales ──────────────────────────────────────────────────────────
 
+_bids_cache: dict[str, tuple[float, dict]] = {}  # vin -> (fetched at, result)
+
+
+@router.get("/vehicles/{vin}/bids", tags=["vehicles"])
+def vehicle_bids(vin: str):
+    """
+    A lot's bid history from Autura, oldest first: [{amount, at}] in dollars. Only amounts and times
+    leave this function; Autura's rows also carry bidder ids, initials and email hints, which we never pass on.
+    Cached 30s so a busy lot page doesn't turn into one Autura request per viewer.
+    """
+    import time
+    from scrapers.autura.autura_api import get_bids
+    hit = _bids_cache.get(vin)
+    if hit and time.time() - hit[0] < 30:
+        return hit[1]
+    v = query("SELECT seller_id, auction_id FROM vehicles WHERE vin = %s", (vin,), one=True)
+    if not v or not v["seller_id"] or not v["auction_id"]:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    try:
+        raw = get_bids(v["seller_id"], v["auction_id"])
+    except Exception:
+        raise HTTPException(status_code=502, detail="Autura bid history unavailable")
+    bids = sorted(({"amount": b["bidAmount"] / 100, "at": b["createdAt"]} for b in raw.get("bids") or [] if b.get("bidAmount") is not None),
+                  key=lambda b: b["at"])
+    result = {"total": raw.get("total", len(bids)), "bids": bids}
+    if len(_bids_cache) > 2000:
+        _bids_cache.clear()
+    _bids_cache[vin] = (time.time(), result)
+    return result
+
+
 @router.post("/historical/stats/batch", tags=["historical"])
 def get_historical_stats_batch(combos: list[dict]):
     results = {}
@@ -143,9 +174,11 @@ def get_garage(user_id: str = Depends(get_current_user)):
                v.catalytic_converter, v.start_status, v.engine_type, v.drivetrain,
                v.fuel_type, v.num_cylinders, v.documentation_type, v.auction_id,
                v.region_id, v.seller_id, v.item_id, v.item_key, v.current_bid,
-               v.bid_expiration, v.reserve_price, v.fee_price, v.seller_notes,
+               v.bid_expiration, v.min_bid, v.reserve_met, v.bidding_status, v.bidding_start,
+               v.run_number, v.platform_fee_rate, v.platform_fee_min, v.platform_fee_max,
+               v.card_fee_rate, v.extra_fees, v.seller_notes,
                v.images, v.images_count, v.published_at, v.last_recorded_odo,
-               v.odo_rollback, v.buyer_total, w.liked_at
+               v.odo_rollback, w.liked_at
         FROM garage w
         JOIN vehicles v ON v.vin = w.vin
         WHERE w.user_id = %s
@@ -156,9 +189,11 @@ def get_garage(user_id: str = Depends(get_current_user)):
                w.catalytic_converter, w.start_status, w.engine_type, w.drivetrain,
                w.fuel_type, w.num_cylinders, w.documentation_type, w.auction_id,
                w.region_id, w.seller_id, w.item_id, w.item_key, w.current_bid,
-               w.bid_expiration, w.reserve_price, w.fee_price, NULL,
+               w.bid_expiration, w.min_bid, NULL, NULL, NULL,
+               NULL, NULL, NULL, NULL,
+               NULL, NULL, NULL,
                w.images, w.images_count, NULL, w.last_recorded_odo,
-               FALSE, NULL, w.liked_at
+               FALSE, w.liked_at
         FROM garage w
         WHERE w.user_id = %s
           AND NOT EXISTS (SELECT 1 FROM vehicles v WHERE v.vin = w.vin)
@@ -179,13 +214,13 @@ def add_to_garage(vin: str, user_id: str = Depends(get_current_user)):
                 vin, user_id, year, make, model, body_type, color, key_status, catalytic_converter,
                 start_status, engine_type, drivetrain, fuel_type, num_cylinders,
                 documentation_type, auction_id, region_id, seller_id, item_id, item_key,
-                current_bid, bid_expiration, reserve_price, fee_price,
+                current_bid, bid_expiration, min_bid,
                 images, images_count, last_recorded_odo, liked_at
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s,
+                %s, %s, %s,
                 %s, %s, %s, NOW()
             )
             ON CONFLICT (vin, user_id) DO NOTHING
@@ -197,7 +232,7 @@ def add_to_garage(vin: str, user_id: str = Depends(get_current_user)):
             vehicle["documentation_type"], vehicle["auction_id"], vehicle["region_id"],
             vehicle["seller_id"], vehicle["item_id"], vehicle["item_key"],
             vehicle["current_bid"], vehicle["bid_expiration"],
-            vehicle["reserve_price"], vehicle["fee_price"],
+            vehicle["min_bid"],
             vehicle["images"], vehicle["images_count"], vehicle["last_recorded_odo"],
         ))
     return {"status": "added", "vin": vin}
