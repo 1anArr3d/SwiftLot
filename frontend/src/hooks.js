@@ -19,6 +19,18 @@ export function fetchPriceRanges(vehicles) {
     .then(data => Object.fromEntries(Object.entries(data).filter(([, s]) => s.count > 0)));
 }
 
+// Every live vehicle plus its price ranges, shared by Home and Search and reused for a minute,
+// so moving between pages doesn't refetch. A failed load is dropped so the next call retries.
+let lots = null;
+export function getLots() {
+  if (!lots || Date.now() - lots.at > 60_000) {
+    const p = getJSON(`${API}/vehicles`).then(async vehicles => ({ vehicles, stats: await fetchPriceRanges(vehicles).catch(() => ({})) }));
+    lots = { at: Date.now(), p };
+    p.catch(() => { if (lots?.p === p) lots = null; });
+  }
+  return lots.p;
+}
+
 // Fetches page data, then price ranges, and hands back the adapted result. Price ranges are optional:
 // if that call fails the page still loads, just without ranges.
 export function usePageData(load, deps) {

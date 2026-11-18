@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
+import { getLots } from './hooks';
 import Nav from './provenance/Nav';
 import Printing from './provenance/Printing';
 import HomePage from './pages/HomePage';
@@ -10,6 +11,9 @@ import GaragePage from './pages/GaragePage';
 import AboutPage from './pages/AboutPage';
 import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
+
+// start the shared vehicle load at startup, alongside the page's own JS
+getLots().catch(() => {});
 
 const ProtectedRoute = ({ children }) => {
   const { user } = useAuth();

@@ -15,7 +15,7 @@ export const ENG = (() => {
     return `${Math.floor(s / 86400)}d ${pad(Math.floor(s % 86400 / 3600))}:${pad(Math.floor(s % 3600 / 60))}:${pad(s % 60)}`; };
 
   // rowsEl gets one persistent child per car; row(v, ctx) returns its inner HTML.
-  function run({ rowsEl, rowH, row, hero, rowClass = 'row', keep = () => true, cmp = () => null }) {
+  function run({ rowsEl, rowH, row, hero, reveal = () => window.scrollTo({ top: 0, behavior: 'smooth' }), rowClass = 'row', keep = () => true, cmp = () => null }) {
     // a link can open a specific car: auction.html?vin=...
     const want = new URLSearchParams(location.search).get('vin');
     let sel = D.vehicles.find(v => v.vin === want) || D.vehicles[0];
@@ -24,7 +24,7 @@ export const ENG = (() => {
     const els = new Map(D.vehicles.map(v => {
       const el = document.createElement('div'); el.className = rowClass; el.tabIndex = 0;
       Object.assign(el.style, { position: 'absolute', left: 0, right: 0 });
-      el.onclick = () => { sel = v; paint(); hero(v); history.replaceState(history.state, '', `?vin=${v.vin}`); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+      el.onclick = () => { sel = v; paint(); hero(v); history.replaceState(history.state, '', `?vin=${v.vin}`); reveal(v, el); };
       el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } };
       rowsEl.append(el); return [v, el];
     }));

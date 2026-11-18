@@ -1,13 +1,11 @@
-import { API, getJSON } from '../api';
-import { fetchPriceRanges, usePageData } from '../hooks';
+import { getLots, usePageData } from '../hooks';
 import { toLot } from '../provenance/adapt';
 import { mount } from '../provenance/pages/search';
 import Provenance from '../provenance/Provenance';
 import Printing from '../provenance/Printing';
 
 const load = async () => {
-  const vehicles = await getJSON(`${API}/vehicles`);
-  const stats = await fetchPriceRanges(vehicles).catch(() => ({}));
+  const { vehicles, stats } = await getLots();
   return { vehicles: vehicles.map(v => toLot(v, stats)) };
 };
 

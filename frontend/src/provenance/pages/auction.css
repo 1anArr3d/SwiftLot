@@ -11,7 +11,7 @@
 .yt-stub b{font:700 30px/1 Cormorant}.yt-stub small{font:600 10px 'Cormorant SC';letter-spacing:.16em;color:#c9b26a}
 .yticket .perf{margin-top:0}
 .yticket .lotfind{margin:0;padding:0 18px 16px}
-.yticket .lotfind input,.yticket .lrow select{border-color:#c9c3b1;background:#fff}
+.yticket .lotfind input[type=search],.yticket .lrow select{border-color:#c9c3b1;background:#fff}
 .yticket .lpanel{background:#f8f5ec;box-shadow:inset 0 0 0 1px #e1dccd;padding:12px 16px 14px}
 /* lot rows are ticket stubs: lot number on a tear-off stub, photo, title, bid vs typical range, foil edge (red = rollback) */
 .page{grid-template-columns:400px minmax(0,1fr)}
@@ -37,15 +37,15 @@
 @media (max-width:600px){.mini{grid-template-columns:40px 70px minmax(0,1fr) auto;padding-right:22px}.mini .stub b{font-size:20px}.mini img{width:62px;height:46px;margin-left:8px}.mini .body{padding:0 6px 0 8px}.mini .body b{font-size:14px}.mini .bid{font-size:14px}.mini .edge{width:8px;right:6px}}
 .tabs button{background:#ddd7c6}
 
-.lotfind{margin:14px 0 12px}.lotfind input{width:100%;height:38px;padding:0 12px;border:1px solid #b9c2da;border-radius:4px;background:#fffdf6;font:500 14px 'IBM Plex Sans Condensed';color:#1b2a33}
-.lotfind input:focus-visible{outline:2px solid #1b2a33;outline-offset:1px}.lrow{display:flex;gap:8px;margin-top:8px}.lrow select{flex:1;height:36px;padding:0 8px;border:1px solid #b9c2da;border-radius:4px;background:#fffdf6;font:500 14px 'IBM Plex Sans Condensed';color:#1b2a33}
+.lotfind{margin:14px 0 12px}.lotfind input[type=search]{width:100%;height:38px;padding:0 12px;border:1px solid #b9c2da;border-radius:4px;background:#fffdf6;font:500 14px 'IBM Plex Sans Condensed';color:#1b2a33}
+.lotfind input[type=search]:focus-visible{outline:2px solid #1b2a33;outline-offset:1px}.lrow{display:flex;gap:8px;margin-top:8px}.lrow select{flex:1;height:36px;padding:0 8px;border:1px solid #b9c2da;border-radius:4px;background:#fffdf6;font:500 14px 'IBM Plex Sans Condensed';color:#1b2a33}
 .lrow .btn{height:36px;padding:0 14px}#lnum:not(:empty){display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:4px;border-radius:9px;background:#a3132a;color:#fff;font-size:11px}
 .lpanel{margin-top:8px;padding:12px 14px;background:#f8f5ec;border-radius:4px;box-shadow:0 6px 14px -10px rgba(27,42,51,.4)}
 .lpanel .two{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px}.lpanel .two label{font-size:12px;color:#56646b}
 .lpanel .two select,.lpanel .two input{display:block;width:100%;margin-top:4px;height:34px;padding:0 8px;border:1px solid #c9c3b1;border-radius:4px;background:#fff;font:500 14px 'IBM Plex Sans Condensed';color:#1b2a33}
 .lpanel .ck{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:14px;cursor:pointer}.lpanel .ck input{accent-color:#1b2a33;width:16px;height:16px}
 .linkbtn{margin-top:6px;padding:0;border:0;background:none;color:#a3132a;font:500 13px 'IBM Plex Sans Condensed';text-decoration:underline;cursor:pointer}
-.lotfind select:focus-visible,.lotfind input:focus-visible,.lotfind button:focus-visible{outline:2px solid #1b2a33;outline-offset:1px}
+.lotfind select:focus-visible,.lotfind input[type=search]:focus-visible,.lotfind button:focus-visible{outline:2px solid #1b2a33;outline-offset:1px}
 #lcount{font-size:13px;color:#56646b;margin-top:8px}
 
 
@@ -130,3 +130,13 @@
 }
 }
 @keyframes fl{0%{background:#f2e3a6}}
+
+/* likely-typo readings: drawn but left out of the rollback check, matching the backend */
+.pg-auction .chart .tline{fill:none;stroke:#8a959b;stroke-width:1;stroke-dasharray:3 3}
+.pg-auction .chart .mk.typo{fill:var(--paper);stroke:#8a959b;stroke-dasharray:2 1.5}
+.pg-auction .chart .tnote{font:italic 600 13px Cormorant;fill:#56646b}
+.pg-auction .readings .typo{color:#8a959b}.pg-auction .readings .typo span:last-child{font-style:italic}
+/* desktop with room for the whole certificate: keep it beside the list while scrolling */
+@media (min-width:1101px) and (min-height:860px){.pg-auction #hero{position:sticky;top:84px}}
+.pg-auction #hero{scroll-margin-top:96px}
+.pg-auction .backlist{position:fixed;left:50%;bottom:20px;z-index:25;transform:translateX(-50%);height:44px;padding:0 20px;box-shadow:0 10px 24px -10px rgba(0,0,0,.5)}
