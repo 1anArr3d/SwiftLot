@@ -1,0 +1,39 @@
+/* page styles from design/provenance, scoped to this page */
+.pg-auctions{
+/* each sale is a printed "notice of sale" */
+.notice{position:relative;display:block;padding:18px 20px 16px;background:#f8f5ec;color:#1b2a33;text-decoration:none;border-radius:3px;box-shadow:0 1px 0 #fff inset,0 10px 24px -14px rgba(27,42,51,.45);transition:transform .2s var(--ease),box-shadow .2s}
+.notice::before{content:"";position:absolute;inset:6px;border:1px solid #c9c3b1;outline:1px solid #c9c3b1;outline-offset:2px;pointer-events:none}
+.notice:hover{transform:translateY(-3px);box-shadow:0 18px 30px -16px rgba(27,42,51,.55)}
+.notice:focus-visible{outline:2px solid #1b2a33;outline-offset:3px}
+.notice .hd{display:flex;justify-content:space-between;font:500 10.5px 'IBM Plex Mono';letter-spacing:.08em;color:#56646b}
+.notice .hd b{color:#a3132a;font-weight:500}
+.notice h3{font:700 22px/1.08 'Cormorant SC';margin:10px 0 2px}
+.notice.closed{opacity:.62}.notice.closed:hover{opacity:1}
+.notice .city{font:italic 500 16px Cormorant;color:#56646b}
+.notice .ft{display:flex;justify-content:space-between;align-items:end;margin-top:18px;padding-top:12px;border-top:1px solid #d9d3c2}
+.notice .ft b{display:block;font:700 30px/1 Cormorant}.notice .ft small{font:500 11px 'Cormorant SC';letter-spacing:.12em;color:#56646b}
+.notice .cl{text-align:right}.notice .cl b{font:500 17px 'IBM Plex Mono'}.notice .cl b.soon{color:#a3132a}
+.notice .tx{display:inline-block;margin-top:8px;padding:2px 8px;border:1px solid #35507a;border-radius:2px;font:500 11px 'IBM Plex Sans Condensed';color:#35507a;background:#e9eff4}
+.head{display:flex;justify-content:space-between;align-items:end;gap:20px;flex-wrap:wrap}
+/* state filters: tickets with notched sides, state on the left, sale count on a dashed stub */
+#pills button{display:flex;align-items:stretch;height:40px;padding:0;border:0;border-radius:2px;background:#ede3c8;
+ -webkit-mask:radial-gradient(circle 5px at 0 50%,#0000 96%,#000) left/51% 100% no-repeat,radial-gradient(circle 5px at 100% 50%,#0000 96%,#000) right/51% 100% no-repeat;
+ mask:radial-gradient(circle 5px at 0 50%,#0000 96%,#000) left/51% 100% no-repeat,radial-gradient(circle 5px at 100% 50%,#0000 96%,#000) right/51% 100% no-repeat}
+#pills b{display:grid;place-items:center;padding:0 10px 0 14px;font:700 16px 'Cormorant SC';letter-spacing:.04em}
+#pills small{display:grid;place-items:center;min-width:30px;padding:0 10px 0 8px;border-left:2px dashed #b5a986;background:#e1d5b3;font:500 12px 'IBM Plex Mono';color:#56646b}
+#pills button:hover small{background:#d8caa3}
+#pills{margin-top:18px;filter:drop-shadow(0 2px 2px rgba(27,42,51,.22))}
+#pills button[aria-pressed=true]{background:#1b2a33;color:#f3f0e4}#pills button[aria-pressed=true] small{background:#24384a;color:#c9b26a;border-color:#56646b}
+#pills button:focus-visible{outline:0;box-shadow:inset 0 0 0 2px #a3132a}
+/* sale finder bar: search, quick toggles, sort, live count */
+.finder{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:26px;padding:12px 14px;background:#f8f5ec;border-radius:3px;box-shadow:0 10px 24px -16px rgba(27,42,51,.45)}
+.finder input[type=search]{flex:1 1 240px;height:38px;padding:0 12px;border:1px solid #c9c3b1;border-radius:4px;background:#fff;font:500 14px 'IBM Plex Sans Condensed';color:#1b2a33}
+.finder select{height:38px;padding:0 8px;border:1px solid #c9c3b1;border-radius:4px;background:#fff;font:500 14px 'IBM Plex Sans Condensed';color:#1b2a33}
+.finder .lchip{height:34px;border-radius:17px}
+.finder .cnt{margin-left:auto;font:500 12px 'IBM Plex Mono';color:#56646b;display:flex;gap:10px;align-items:center}
+.finder .cnt button{border:0;background:none;color:#a3132a;font:inherit;text-decoration:underline;cursor:pointer}
+.finder input:focus-visible,.finder select:focus-visible{outline:2px solid #c9b26a;outline-offset:1px}
+.empty{padding:40px;text-align:center;font:italic 500 20px Cormorant;color:#56646b}
+.group{font:700 20px 'Cormorant SC';color:#56646b;margin:30px 0 12px}
+}
+

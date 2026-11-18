@@ -1,0 +1,14 @@
+/* React shell additions on top of holo.css + banknote.css */
+#root{min-height:100vh}
+/* sign in / out sits at the far right of the nav */
+.top .auth{margin-left:auto;padding:6px 12px;border:1px solid rgba(201,178,106,.6);border-radius:3px;background:none;color:#f3f0e4;font:500 14px 'IBM Plex Sans Condensed';cursor:pointer;text-decoration:none}
+.top .auth:hover{border-color:#c9b26a;color:#fff}.top .auth:focus-visible{outline:2px solid #c9b26a;outline-offset:2px}
+.top .r:not(:empty)+.auth{margin-left:18px}.top .r:empty{display:none}
+/* phone: logo and sign-in share the first row, links wrap to the second */
+@media (max-width:600px){.top b{order:-2;flex:1 0 calc(100% - 100px)}.top .auth{order:-1;flex:none;margin-left:0;padding:4px 10px;font-size:14px}}
+/* while a page loads, the printing card covers the page but leaves the nav usable */
+.pload{z-index:15}
+.pload .sheet p{font:500 17px/1.45 Cormorant;color:#56646b;margin-top:8px}
+.pload .sheet .btn{margin-top:16px}
+/* garage save failures */
+.toast{position:fixed;left:50%;bottom:24px;z-index:30;transform:translateX(-50%);max-width:calc(100% - 32px);padding:10px 16px;border-radius:3px;background:#a3132a;color:#fff;font:500 14px 'IBM Plex Sans Condensed';box-shadow:0 10px 24px -12px rgba(0,0,0,.5)}

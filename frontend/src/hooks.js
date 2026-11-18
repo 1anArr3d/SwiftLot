@@ -5,23 +5,33 @@ import { useAuth } from './AuthContext';
 
 const GENERIC = new Set(['other', 'unknown', 'misc', 'n/a', 'na']);
 
-// Price ranges for every make/model/year in the list, keyed "make|model|year".
-export function usePriceRanges(vehicles) {
-  const [stats, setStats] = useState({});
-  // Keyed on the combos themselves, so a different list of the same length still refetches
-  const combos = JSON.stringify([...new Set(vehicles
-    .filter(v => v.make && v.model && v.year && !GENERIC.has(v.make.toLowerCase()) && !GENERIC.has(v.model.toLowerCase()))
-    .map(v => JSON.stringify([v.make, v.model, v.year])))].sort());
+// Price ranges for every make/model/year in the list, keyed "make|model|year". Resolves {} when there is nothing to ask for.
+export function fetchPriceRanges(vehicles) {
+  const seen = new Set();
+  const list = vehicles.filter(v => {
+    if (!v.make || !v.model || !v.year || GENERIC.has(v.make.toLowerCase()) || GENERIC.has(v.model.toLowerCase())) return false;
+    const k = `${v.make}|${v.model}|${v.year}`;
+    if (seen.has(k)) return false;
+    seen.add(k); return true;
+  }).map(v => ({ make: v.make, model: v.model, year: v.year }));
+  if (!list.length) return Promise.resolve({});
+  return getJSON(`${API}/historical/stats/batch`, { method: 'POST', body: JSON.stringify(list) })
+    .then(data => Object.fromEntries(Object.entries(data).filter(([, s]) => s.count > 0)));
+}
+
+// Fetches page data, then price ranges, and hands back the adapted result. Price ranges are optional:
+// if that call fails the page still loads, just without ranges.
+export function usePageData(load, deps) {
+  const [state, setState] = useState({ data: null, error: false });
   useEffect(() => {
-    const list = JSON.parse(combos).map(c => { const [make, model, year] = JSON.parse(c); return { make, model, year }; });
-    if (!list.length) return;
-    let cancelled = false;
-    getJSON(`${API}/historical/stats/batch`, { method: 'POST', body: JSON.stringify(list) })
-      .then(data => { if (!cancelled) setStats(Object.fromEntries(Object.entries(data).filter(([, s]) => s.count > 0))); })
-      .catch(console.error);
-    return () => { cancelled = true; };
-  }, [combos]);
-  return stats;
+    let off = false;
+    load()
+      .then(d => { if (!off) setState({ data: d, error: false }); })
+      .catch(err => { console.error(err); if (!off) setState({ data: null, error: true }); });
+    return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return state;
 }
 
 // Live bids over SSE, keyed by item_key. Streams by each vehicle's own auction_id (one per lot, not per seller).

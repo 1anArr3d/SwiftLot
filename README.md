@@ -54,23 +54,24 @@ backend/
 
 frontend/
   src/
-    App.jsx                        # Router and top nav
+    App.jsx                        # Routes
     api.js                         # API base URL, getJSON / authFetch (throw on non-2xx)
-    AuthContext.jsx                 # Firebase auth context
-    vehicles.js                    # Vehicle helpers: odometer parsing, price-range text, search matching
-    hooks.js                       # usePriceRanges, useLiveBids, useGarage
-    pages/
-      HomePage.jsx                 # / — rotating vehicle carousel
-      AuctionsPage.jsx             # /auctions — seller card grid
-      AuctionDetailPage.jsx        # /auctions/:id — vehicle table with live bid updates
-      SearchPage.jsx               # /search — full live inventory with filters
-      GaragePage.jsx               # /my-garage — saved vehicles with live bid streaming
-      LoginPage.jsx                # /login
-      AboutPage.jsx                # /about
-    components/
-      FilterSection.jsx
-      ChecklistFilter.jsx
-      ImageCycler.jsx
+    AuthContext.jsx                # Firebase auth context
+    hooks.js                       # fetchPriceRanges, usePageData, useLiveBids, useGarage
+    pages/                         # Thin React pages: fetch data, then mount a Provenance page
+      HomePage.jsx                 # /
+      AuctionsPage.jsx             # /auctions — notices of sale with state/finder filters
+      AuctionDetailPage.jsx        # /auctions/:id?vin= — lot list + three-copy certificate, live bids
+      SearchPage.jsx               # /search — every lot, Ledger filters
+      GaragePage.jsx               # /garage — saved vehicles (sign-in required)
+      LoginPage.jsx, AboutPage.jsx, NotFoundPage.jsx
+    provenance/                    # The "Provenance" certificate design (ported from design/provenance)
+      holo.css, banknote.css, shell.css
+      Nav.jsx, Printing.jsx        # Nav bar with gilded logo; loading / could-not-load card
+      Provenance.jsx               # Hosts a page's mount(), routes in-app links, stops timers on unmount
+      adapt.js                     # API rows -> page data (parsed photos, odometer readings, price range; text escaped)
+      sl.js, engine.js, patterns.js, ledger.js, gallery.js, holo.js, homeCommon.js, life.js
+      pages/                       # One mount() + scoped CSS per page
 ```
 
 ## Data model

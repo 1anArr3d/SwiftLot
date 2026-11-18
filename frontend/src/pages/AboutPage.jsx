@@ -1,39 +1,30 @@
-const AboutPage = () => (
-  <div style={{
-    maxWidth: 720,
-    margin: '48px auto',
-    padding: '0 24px',
-    fontFamily: 'var(--font)',
-    color: 'var(--text-primary)',
-  }}>
-    <h1 style={{ fontSize: 42, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--sky-light)', marginBottom: 4 }}>
-      SwiftLot
-    </h1>
+import { PAT } from '../provenance/patterns';
+import '../provenance/pages/sheet.css';
 
-    <p style={{ fontSize: 18, lineHeight: 1.7, marginBottom: 24 }}>
-      Car auctions are fast, loud, and unforgiving. Without knowing what a vehicle
-      actually sells for, it's easy to overbid on excitement or let a solid deal
-      slip by out of uncertainty. SwiftLot cuts through that noise by putting
-      historical sale data right next to the live auction — so you always know
-      what fair looks like.
-    </p>
+const GUIL = { __html: PAT.waves('#35507a') };
 
-    <p style={{ fontSize: 18, lineHeight: 1.7, marginBottom: 40 }}>
-      Built for the first-timer who wants to show up prepared, not just hopeful.
-    </p>
-
-    <hr style={{ border: 'none', borderTop: '1px solid var(--border-bright)', marginBottom: 40 }} />
-
-    <h2 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--sky-light)', marginBottom: 20 }}>
-      What you get
-    </h2>
-    <ul style={{ fontSize: 17, lineHeight: 2, paddingLeft: 20, color: 'var(--text-primary)' }}>
-      <li>Live auction tracking with real-time bid updates</li>
-      <li>Historical average sale prices for make, model, and year</li>
-      <li>Garage to save and follow vehicles across auctions</li>
-      <li>Garage snapshots preserve your saved vehicles after an auction closes</li>
-    </ul>
-  </div>
-);
-
-export default AboutPage;
+export default function AboutPage() {
+  return (
+    <div className="pg-sheet">
+      <main className="wrap">
+        <article className="sheet">
+          <div className="guil" dangerouslySetInnerHTML={GUIL} />
+          <h1>Where the numbers come from</h1>
+          <p>SwiftLot helps first-time buyers at tow-yard and impound auctions avoid overbidding. Every car gets three certificates, each backed by real records.</p>
+          <h2>Value</h2>
+          <p>The typical price is the middle half (25th–75th percentile) of past sales of the same make and model. We use the same year when there are 5 or more sales, widen to ±2 years if not, then all years. With fewer than 5 sales we show no range rather than guess.</p>
+          <h2>Odometer</h2>
+          <p>For Texas cars we pull state inspection records for the VIN. A drop of more than 2,000 miles between readings flags a possible rollback. A single reading that looks like a typo is ignored, so one bad entry doesn't flag an honest car.</p>
+          <h2>Vehicle</h2>
+          <p>Make, model, year and condition notes come straight from the yard's listing. "If you win now" adds the yard's buyer fee to the current bid.</p>
+          <h2>What we can't tell you</h2>
+          <ul>
+            <li>Mechanical condition — inspect in person when the yard allows it.</li>
+            <li>Odometer history outside Texas.</li>
+            <li>Title problems beyond what the yard lists.</li>
+          </ul>
+        </article>
+      </main>
+    </div>
+  );
+}

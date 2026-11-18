@@ -1,0 +1,10 @@
+/* page styles from design/provenance, scoped to this page */
+.pg-garage{
+.head{display:flex;justify-content:space-between;align-items:end;gap:20px;flex-wrap:wrap}
+.remove{position:absolute;right:44px;top:20px;z-index:3;width:28px;height:28px;border-radius:50%;border:1px solid #c9c3b1;background:#f8f5ec;color:#56646b;font:600 14px 'IBM Plex Sans Condensed';cursor:pointer}
+.remove:hover{color:#a3132a;border-color:#a3132a}
+.remove:focus-visible{outline:2px solid #1b2a33;outline-offset:2px}
+.slot{position:relative}
+.empty{padding:50px;text-align:center;background:#f8f5ec;border-radius:3px}.empty p{font:italic 500 20px Cormorant;color:#56646b;margin-bottom:14px}
+}
+
