@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 from auth import get_current_user
 from db import query, get_db
 from pricing import price_range
-from models import Auction, Vehicle, OdometerEntry, GarageVehicle, SavedAuction
+from models import Auction, Vehicle, GarageVehicle
 from scrapers.autura import auction_listener as listener
 import asyncio
 import json
@@ -121,21 +121,6 @@ def search_vehicles(
 
 # ── Historical Sales ──────────────────────────────────────────────────────────
 
-@router.get("/vehicles/{vin}/history", tags=["vehicles"])
-def get_vehicle_history(vin: str):
-    rows = query(
-        "SELECT * FROM historical_sales WHERE vin = %s ORDER BY sold_at DESC",
-        (vin,)
-    )
-    return [dict(row) for row in rows]
-
-
-@router.get("/historical/stats", tags=["historical"])
-def get_historical_stats(make: str, model: str, year: int):
-    """Price range (25th-75th percentile) from the closest match with enough sales; see pricing.py."""
-    return {"make": make, "model": model, "year": year, **(price_range(make, model, year) or {"count": 0})}
-
-
 @router.post("/historical/stats/batch", tags=["historical"])
 def get_historical_stats_batch(combos: list[dict]):
     results = {}
@@ -147,39 +132,6 @@ def get_historical_stats_batch(combos: list[dict]):
         if r:
             results[f"{make}|{model}|{year}"] = r
     return results
-
-
-@router.get("/historical/search", tags=["historical"])
-def search_historical(make: str = None, model: str = None, year: int = None, region_id: str = None, limit: int = 50):
-    filters, args = [], []
-    if make:
-        filters.append("UPPER(make) = UPPER(%s)")
-        args.append(make)
-    if model:
-        filters.append("UPPER(model) LIKE UPPER(%s)")
-        args.append(f"%{model}%")
-    if year:
-        filters.append("year = %s")
-        args.append(year)
-    if region_id:
-        filters.append("region_id = %s")
-        args.append(region_id)
-    where = ("WHERE " + " AND ".join(filters)) if filters else ""
-    args.append(limit)
-    rows = query(
-        f"SELECT * FROM historical_sales {where} ORDER BY sold_at DESC LIMIT %s",
-        tuple(args)
-    )
-    return [dict(row) for row in rows]
-
-
-# ── Vehicles ──────────────────────────────────────────────────────────────────
-
-
-@router.get("/vehicles/{vin}/odometer", response_model=list[OdometerEntry], tags=["vehicles"])
-def get_odometer_history(vin: str):
-    rows = query("SELECT * FROM odometer_history WHERE vin = %s ORDER BY row_id  -- _0 is newest; inspection_date is M/D/YYYY text", (vin,))
-    return [dict(row) for row in rows]
 
 
 # ── Garage ────────────────────────────────────────────────────────────────────
@@ -258,59 +210,7 @@ def remove_from_garage(vin: str, user_id: str = Depends(get_current_user)):
     return {"status": "removed", "vin": vin}
 
 
-# ── Saved Auctions ────────────────────────────────────────────────────────────
-
-@router.get("/saved-auctions", response_model=list[SavedAuction], tags=["saved-auctions"])
-def get_saved_auctions(user_id: str = Depends(get_current_user)):
-    rows = query("""
-        SELECT s.auction_id AS region_id,
-               MAX(a.seller_name) AS seller_name,
-               MAX(a.seller_city) AS seller_city,
-               MAX(a.seller_state) AS seller_state,
-               'ACTIVE' AS auction_status,
-               COUNT(v.vin) AS vehicles_listed,
-               MIN(v.bid_expiration) AS closes_at,
-               s.saved_at
-        FROM saved_auctions s
-        JOIN sellers a ON s.auction_id = a.region_id
-        LEFT JOIN vehicles v ON v.region_id = a.region_id
-        WHERE s.user_id = %s
-        GROUP BY s.auction_id, s.saved_at
-        ORDER BY s.saved_at DESC
-    """, (user_id,))
-    return [dict(row) for row in rows]
-
-
-@router.get("/saved-auctions/check/{region_id}", tags=["saved-auctions"])
-def check_saved_auction(region_id: str, user_id: str = Depends(get_current_user)):
-    row = query("SELECT 1 FROM saved_auctions WHERE auction_id = %s AND user_id = %s", (region_id, user_id), one=True)
-    return {"saved": row is not None}
-
-
-@router.post("/saved-auctions/{region_id}", tags=["saved-auctions"])
-def save_auction(region_id: str, user_id: str = Depends(get_current_user)):
-    auction = query("SELECT 1 FROM sellers WHERE region_id = %s LIMIT 1", (region_id,), one=True)
-    if not auction:
-        raise HTTPException(status_code=404, detail="Auction not found")
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO saved_auctions (auction_id, user_id, saved_at) VALUES (%s, %s, NOW()) ON CONFLICT DO NOTHING",
-            (region_id, user_id)
-        )
-    return {"status": "saved", "region_id": region_id}
-
-
-@router.delete("/saved-auctions/{region_id}", tags=["saved-auctions"])
-def unsave_auction(region_id: str, user_id: str = Depends(get_current_user)):
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM saved_auctions WHERE auction_id = %s AND user_id = %s",
-            (region_id, user_id)
-        )
-    return {"status": "removed", "region_id": region_id}
-
-
-# ── SSE Stream ────────────────────────────────────────────────────────────────
+# ── Live Bids ─────────────────────────────────────────────────────────────────
 
 @router.get("/stream/multi", tags=["stream"])
 async def stream_multi_auctions(request: Request, auctions: str = ""):
@@ -381,44 +281,3 @@ async def stream_multi_auctions(request: Request, auctions: str = ""):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-@router.get("/stream/auction/{auction_id}", tags=["stream"])
-async def stream_auction_updates(auction_id: str):
-    """
-    SSE stream for live updates on a single auction.
-    Emits: {"type":"update","auction_id":..,"vehicles":[{item_key,current_bid,bid_expiration},...]}
-    Emits: {"type":"ended","auction_id":..}
-    """
-    async def event_gen():
-        still_active = query(
-            "SELECT 1 FROM vehicles WHERE auction_id = %s LIMIT 1",
-            (auction_id,), one=True
-        )
-        if not still_active:
-            yield f"data: {json.dumps({'type': 'ended', 'auction_id': auction_id})}\n\n"
-            return
-
-        queue = asyncio.Queue()
-        listener.add_client(auction_id, queue)
-        try:
-            # Snapshot on connect
-            yield f"data: {json.dumps(listener._vehicle_snapshot(auction_id))}\n\n"
-
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=25)
-                    yield f"data: {json.dumps(event)}\n\n"
-                    if event.get("type") == "ended":
-                        break
-                except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
-        finally:
-            listener.remove_client(auction_id, queue)
-
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-

@@ -1,26 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { API, authFetch } from '../api';
-import { useAuth } from '../AuthContext';
+import { API, getJSON } from '../api';
+import { parseImages, parseOdo, statsKey, LEVEL_LABEL, fmtRange, fmtRangeDetail, matchesSearch } from '../vehicles';
+import { usePriceRanges, useGarage } from '../hooks';
 import FilterSection from '../components/FilterSection';
 import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
 
-const parseImages = (raw) => { try { return JSON.parse(raw); } catch { return []; } };
-const LEVEL_LABEL = { year: 'same year', near: '±2 yrs', all: 'all years' };
-const fmtRange = (s, fmt$) => s ? `${fmt$(s.low)}–${fmt$(s.high)}` : '—';
-const fmtRangeDetail = (s, fmt$) => {
-  if (!s) return 'Not enough sales data';
-  return `${fmtRange(s, fmt$)} · median ${fmt$(s.median)} · ${s.count} sales (${LEVEL_LABEL[s.level]})`;
-};
-
 const SearchPage = () => {
   const navigate = useNavigate();
-  const { token } = useAuth();
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [watchlistVins, setWatchlistVins] = useState(new Set());
-  const [histStats, setHistStats] = useState({});
+  const [loadError, setLoadError] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedVins, setExpandedVins] = useState(new Set());
   const [yearRange, setYearRange] = useState([null, null]);
@@ -29,53 +20,15 @@ const SearchPage = () => {
     make: new Set(), model: new Set(),
     start_status: new Set(), engine_type: new Set(), drivetrain: new Set(),
   });
+  const histStats = usePriceRanges(vehicles);
+  const garage = useGarage();
 
   useEffect(() => {
-    fetch(`${API}/vehicles`)
-      .then(r => r.json())
+    getJSON(`${API}/vehicles`)
       .then(setVehicles)
-      .catch(console.error)
+      .catch(err => { console.error(err); setLoadError(true); })
       .finally(() => setLoading(false));
   }, []);
-
-  useEffect(() => {
-    if (!token) return;
-    authFetch(token, `${API}/garage`)
-      .then(r => r.json())
-      .then(data => setWatchlistVins(new Set(data.map(v => v.vin))))
-      .catch(console.error);
-  }, [token]);
-
-
-  const statsKey = (v) => `${v.make}|${v.model}|${v.year}`;
-
-  useEffect(() => {
-    if (!vehicles.length) return;
-    const GENERIC = new Set(['other', 'unknown', 'misc', 'n/a', 'na']);
-    const seen = new Set();
-    const combos = vehicles.filter(v => {
-      if (!v.make || !v.model || !v.year) return false;
-      if (GENERIC.has(v.make.toLowerCase()) || GENERIC.has(v.model.toLowerCase())) return false;
-      const k = statsKey(v);
-      if (seen.has(k)) return false;
-      seen.add(k); return true;
-    }).map(v => ({ make: v.make, model: v.model, year: v.year }));
-    if (!combos.length) return;
-    fetch(`${API}/historical/stats/batch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(combos),
-    })
-      .then(r => r.json())
-      .then(data => setHistStats(Object.fromEntries(Object.entries(data).filter(([, v]) => v.count > 0))))
-      .catch(console.error);
-  }, [vehicles.length]);
-
-  const parseOdo = (odoStr) => {
-    if (!odoStr) return null;
-    const m = odoStr.split('\n')[0].match(/:\s*([\d,]+)/);
-    return m ? parseInt(m[1].replace(/,/g, '')) : null;
-  };
 
   const years = [...new Set(vehicles.map(c => c.year).filter(Boolean))].sort();
   const minYear = years[0] ? parseInt(years[0]) : 2000;
@@ -108,11 +61,7 @@ const SearchPage = () => {
     for (const [key, sel] of Object.entries(filters)) {
       if (sel.size > 0 && !sel.has(car[key])) return false;
     }
-    if (searchTerm) {
-      const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
-      const haystack = Object.values(car).map(v => String(v || '').toLowerCase()).join(' ');
-      if (!terms.every(t => haystack.includes(t))) return false;
-    }
+    if (!matchesSearch(car, searchTerm)) return false;
     return true;
   }).sort((a, b) => {
     const ma = (a.make || '').localeCompare(b.make || '');
@@ -122,26 +71,12 @@ const SearchPage = () => {
     return (parseInt(a.year) || 0) - (parseInt(b.year) || 0);
   });
 
-  const toggleWatchlist = async (e, vin) => {
-    e.stopPropagation();
-    if (!token) { navigate('/login', { state: { from: window.location.pathname } }); return; }
-    const inList = watchlistVins.has(vin);
-    try {
-      await authFetch(token, `${API}/garage/${vin}`, { method: inList ? 'DELETE' : 'POST' });
-      setWatchlistVins(prev => {
-        const next = new Set(prev);
-        inList ? next.delete(vin) : next.add(vin);
-        return next;
-      });
-    } catch (err) {
-      console.error('Watchlist toggle failed:', err);
-    }
-  };
 
   const COLS = 16;
   const fmt$ = v => v != null ? `$${Number(v).toLocaleString()}` : '—';
 
   if (loading) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>Loading vehicles…</div>;
+  if (loadError) return <div className="page-content" style={{ color: 'var(--text-secondary)', padding: 32 }}>Couldn't load vehicles. Check your connection, then <button className="btn" onClick={() => window.location.reload()}>Try again</button></div>;
 
   return (
     <div className="app-wrapper">
@@ -191,6 +126,7 @@ const SearchPage = () => {
       </aside>
 
       <div className="main-content">
+        {garage.error && <div className="empty-msg" role="alert">{garage.error}</div>}
         <div className="controls">
           <input
             placeholder="Search..."
@@ -213,7 +149,7 @@ const SearchPage = () => {
               {filtered.map((car, idx) => {
                 const images = car.images ? parseImages(car.images) : [];
                 const isExpanded = expandedVins.has(car.vin);
-                const liked = watchlistVins.has(car.vin);
+                const liked = garage.vins.has(car.vin);
                 return [
                   <tr
                     key={car.vin}
@@ -242,7 +178,7 @@ const SearchPage = () => {
                     <td>
                       <button
                         className={`btn${liked ? ' saved' : ''}`}
-                        onClick={e => toggleWatchlist(e, car.vin)}
+                        onClick={e => { e.stopPropagation(); garage.toggle(car.vin); }}
                       >
                         {liked ? 'Saved' : 'Save'}
                       </button>
@@ -259,7 +195,7 @@ const SearchPage = () => {
                             <div className="expanded-actions">
                               <button
                                 className="btn"
-                                onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.region_id}`, { state: { vin: car.vin } }); }}
+                                onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.region_id}?vin=${car.vin}`); }}
                               >
                                 View in Auction
                               </button>

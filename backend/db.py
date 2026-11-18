@@ -202,12 +202,8 @@ def init_db():
             UNIQUE (vin, auction_id)
         )''')
 
-        conn.execute('''CREATE TABLE IF NOT EXISTS saved_auctions (
-            auction_id  TEXT,
-            user_id     TEXT,
-            saved_at    TEXT,
-            PRIMARY KEY (auction_id, user_id)
-        )''')
+        # saved auctions feature removed from the frontend
+        conn.execute('DROP TABLE IF EXISTS saved_auctions')
 
     with get_db() as conn:
         # One-time backfill: seed sellers from the old per-lot auctions table, if

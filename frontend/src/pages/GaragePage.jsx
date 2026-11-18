@@ -2,25 +2,18 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API, authFetch } from '../api';
 import { useAuth } from '../AuthContext';
+import { parseImages, parseOdo, statsKey, LEVEL_LABEL, fmtRange, fmtRangeDetail, matchesSearch } from '../vehicles';
+import { usePriceRanges, useLiveBids } from '../hooks';
 import FilterSection from '../components/FilterSection';
 import ChecklistFilter from '../components/ChecklistFilter';
 import ImageCycler from '../components/ImageCycler';
 
-const parseImages = (raw) => { try { return JSON.parse(raw); } catch { return []; } };
-const LEVEL_LABEL = { year: 'same year', near: '±2 yrs', all: 'all years' };
-const fmtRange = (s, fmt$) => s ? `${fmt$(s.low)}–${fmt$(s.high)}` : '—';
-const fmtRangeDetail = (s, fmt$) => {
-  if (!s) return 'Not enough sales data';
-  return `${fmtRange(s, fmt$)} · median ${fmt$(s.median)} · ${s.count} sales (${LEVEL_LABEL[s.level]})`;
-};
-
-const WatchlistPage = () => {
+const GaragePage = () => {
   const navigate = useNavigate();
-  const { token } = useAuth();
+  const { user } = useAuth();
   const [vehicles, setVehicles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [liveBids, setLiveBids] = useState({});
-  const [histStats, setHistStats] = useState({});
+  const [error, setError] = useState('');
   const [expandedVins, setExpandedVins] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [yearRange, setYearRange] = useState([null, null]);
@@ -29,82 +22,27 @@ const WatchlistPage = () => {
     make: new Set(), model: new Set(), start_status: new Set(),
     engine_type: new Set(), drivetrain: new Set(),
   });
+  const liveBids = useLiveBids(vehicles);
+  const histStats = usePriceRanges(vehicles);
 
   useEffect(() => {
-    if (!token) return;
-    authFetch(token, `${API}/garage`)
-      .then(r => r.json())
+    if (!user) return;
+    authFetch(user, `${API}/garage`)
       .then(setVehicles)
-      .catch(console.error)
+      .catch(err => { console.error(err); setError("Couldn't load your garage. Check your connection and refresh."); })
       .finally(() => setLoading(false));
-  }, [token]);
-
-  const statsKey = (v) => `${v.make}|${v.model}|${v.year}`;
-
-  useEffect(() => {
-    if (!vehicles.length) return;
-    const GENERIC = new Set(['other', 'unknown', 'misc', 'n/a', 'na']);
-    const seen = new Set();
-    const combos = vehicles.filter(v => {
-      if (!v.make || !v.model || !v.year) return false;
-      if (GENERIC.has(v.make.toLowerCase()) || GENERIC.has(v.model.toLowerCase())) return false;
-      const k = statsKey(v);
-      if (seen.has(k)) return false;
-      seen.add(k); return true;
-    }).map(v => ({ make: v.make, model: v.model, year: v.year }));
-    if (!combos.length) return;
-    fetch(`${API}/historical/stats/batch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(combos),
-    })
-      .then(r => r.json())
-      .then(data => setHistStats(Object.fromEntries(Object.entries(data).filter(([, v]) => v.count > 0))))
-      .catch(console.error);
-  }, [vehicles.length]);
-
-  const auctionIdKey = [...new Set(vehicles.filter(v => v.auction_id).map(v => v.auction_id))].sort().join(',');
-  useEffect(() => {
-    if (!auctionIdKey) return;
-    setLiveBids({});
-    let stopped = false;
-    let source;
-
-    const connect = () => {
-      if (stopped) return;
-      source = new EventSource(`${API}/stream/multi?auctions=${auctionIdKey}`);
-      source.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'bid') {
-          setLiveBids(prev => ({ ...prev, [msg.item_key]: { amount: msg.amount, expires: msg.expires } }));
-        } else if (msg.type === 'update') {
-          setLiveBids(prev => {
-            const next = { ...prev };
-            (msg.vehicles || []).forEach(v => { if (v.item_key) next[v.item_key] = { amount: v.current_bid, expires: v.bid_expiration }; });
-            return next;
-          });
-        }
-      };
-      source.onerror = () => {
-        source.close();
-        if (!stopped) setTimeout(connect, 3000);
-      };
-    };
-
-    connect();
-    return () => { stopped = true; source?.close(); };
-  }, [auctionIdKey]);
+  }, [user]);
 
   const handleRemove = async (e, vin) => {
     e.stopPropagation();
-    await authFetch(token, `${API}/garage/${vin}`, { method: 'DELETE' });
-    setVehicles(prev => prev.filter(v => v.vin !== vin));
-  };
-
-  const parseOdo = (odoStr) => {
-    if (!odoStr) return null;
-    const m = odoStr.split('\n')[0].match(/:\s*([\d,]+)/);
-    return m ? parseInt(m[1].replace(/,/g, '')) : null;
+    setError('');
+    try {
+      await authFetch(user, `${API}/garage/${vin}`, { method: 'DELETE' });
+      setVehicles(prev => prev.filter(v => v.vin !== vin));
+    } catch (err) {
+      console.error(err);
+      setError("Couldn't remove that car. Check your connection and try again.");
+    }
   };
 
   const years = [...new Set(vehicles.map(c => c.year).filter(Boolean))].sort();
@@ -138,11 +76,7 @@ const WatchlistPage = () => {
     for (const [key, sel] of Object.entries(filters)) {
       if (sel.size > 0 && !sel.has(car[key])) return false;
     }
-    if (searchTerm) {
-      const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
-      const haystack = Object.values(car).map(v => String(v || '').toLowerCase()).join(' ');
-      if (!terms.every(t => haystack.includes(t))) return false;
-    }
+    if (!matchesSearch(car, searchTerm)) return false;
     return true;
   }).sort((a, b) => {
     const ma = (a.make || '').localeCompare(b.make || '');
@@ -207,6 +141,7 @@ const WatchlistPage = () => {
         <div className="auction-detail-header">
           <span className="auction-detail-name">My Garage</span>
         </div>
+        {error && <div className="empty-msg" role="alert">{error}</div>}
         <div className="controls">
           <input
             placeholder="Search..."
@@ -287,7 +222,7 @@ const WatchlistPage = () => {
                             </div>
                             <div className="expanded-actions">
                               {car.auction_id && (
-                                <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.region_id}`); }}>
+                                <button className="btn" onClick={e => { e.stopPropagation(); navigate(`/auctions/${car.region_id}?vin=${car.vin}`); }}>
                                   View Auction
                                 </button>
                               )}
@@ -324,4 +259,4 @@ const WatchlistPage = () => {
   );
 };
 
-export default WatchlistPage;
+export default GaragePage;

@@ -174,7 +174,7 @@ export default function HomePage() {
   const onClick = e => {
     if (drag.current.delta > 5) return;
     const card = drag.current.target?.closest('[data-auction-id]');
-    if (card) navigate(`/auctions/${card.dataset.auctionId}`, { state: { vin: card.dataset.vin } });
+    if (card) navigate(`/auctions/${card.dataset.auctionId}?vin=${card.dataset.vin}`);
   };
 
   // Register card DOM nodes; trigger init when all NUM_CARDS are ready
@@ -258,9 +258,9 @@ export default function HomePage() {
         </div>
         <div className="auction-card home-feature-card">
           <div className="home-feature-icon">&#9733;</div>
-          <div className="home-feature-title">Save Auctions</div>
+          <div className="home-feature-title">Your Garage</div>
           <div className="home-feature-body">
-            Bookmark auctions you care about and track them from your watchlist.
+            Save the cars you're eyeing and follow their bids in one place.
           </div>
         </div>
       </div>

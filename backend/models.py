@@ -52,19 +52,3 @@ class GarageVehicle(Vehicle):
     liked_at: Optional[str] = None
 
 
-class SavedAuction(BaseModel):
-    region_id: str
-    seller_name: Optional[str] = None
-    seller_city: Optional[str] = None
-    seller_state: Optional[str] = None
-    auction_status: Optional[str] = None
-    vehicles_listed: Optional[int] = None
-    closes_at: Optional[str] = None
-    saved_at: Optional[str] = None
-
-
-class OdometerEntry(BaseModel):
-    row_id: str
-    vin: str
-    inspection_date: Optional[str] = None
-    mileage: Optional[int] = None

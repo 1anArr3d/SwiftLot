@@ -5,8 +5,7 @@ import { auth } from './firebase';
 import { AuthProvider, useAuth } from './AuthContext';
 import AuctionsPage from './pages/AuctionsPage';
 import AuctionDetailPage from './pages/AuctionDetailPage';
-import WatchlistPage from './pages/WatchlistPage';
-import SavedAuctionsPage from './pages/SavedAuctionsPage';
+import GaragePage from './pages/GaragePage';
 import LoginPage from './pages/LoginPage';
 import AboutPage from './pages/AboutPage';
 import HomePage from './pages/HomePage';
@@ -84,7 +83,6 @@ const NavBar = () => {
             </button>
             {openDropdown === 'account' && (
               <div className="nav-dropdown-panel">
-                <NavLink to="/watchlist" className="nav-dropdown-item" onClick={close}>Watchlist</NavLink>
                 <NavLink to="/my-garage" className="nav-dropdown-item" onClick={close}>My Garage</NavLink>
               </div>
             )}
@@ -107,8 +105,7 @@ const App = () => (
         <Route path="/auctions" element={<AuctionsPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/auctions/:id" element={<AuctionDetailPage />} />
-        <Route path="/watchlist" element={<ProtectedRoute><SavedAuctionsPage /></ProtectedRoute>} />
-        <Route path="/my-garage" element={<ProtectedRoute><WatchlistPage /></ProtectedRoute>} />
+        <Route path="/my-garage" element={<ProtectedRoute><GaragePage /></ProtectedRoute>} />
         <Route path="/about" element={<AboutPage />} />
         <Route path="*" element={
           <div style={{ padding: '64px 32px', textAlign: 'center', color: 'var(--text-secondary)' }}>

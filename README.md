@@ -15,7 +15,7 @@ Live at [swift-lot.com](https://swift-lot.com)
 - Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then fetches up to 5 years of odometer readings per VIN via authenticated HTTP
 - **Odometer rollback detection** — flags a vehicle when a newer inspection records more than 2,000 fewer miles than an older one, ignoring single out-of-line readings (inspector typos); shown as a "Possible rollback" badge
 - Captures final sale prices from completed auctions and shows a **price range** (25th–75th percentile) per vehicle from the closest match with 5+ sales: same year/make/model, then ±2 years, then any year. Truncated makes (`CHEVROL` → `CHEVROLET`) and punctuation variants (`F - 150` → `F150`) are merged; trims are not
-- Firebase Auth — per-user garage (saved vehicles) and saved auctions (saved sellers)
+- Firebase Auth — per-user garage (saved vehicles)
 - Garage snapshots preserve a vehicle's last-known data after it sells or is pulled, so saved vehicles are never lost
 - Filterable UI by year range, make, model, start status, engine, drivetrain, odometer range
 
@@ -55,15 +55,16 @@ backend/
 frontend/
   src/
     App.jsx                        # Router and top nav
-    api.js                         # API base URL (env-aware)
+    api.js                         # API base URL, getJSON / authFetch (throw on non-2xx)
     AuthContext.jsx                 # Firebase auth context
+    vehicles.js                    # Vehicle helpers: odometer parsing, price-range text, search matching
+    hooks.js                       # usePriceRanges, useLiveBids, useGarage
     pages/
       HomePage.jsx                 # / — rotating vehicle carousel
       AuctionsPage.jsx             # /auctions — seller card grid
       AuctionDetailPage.jsx        # /auctions/:id — vehicle table with live bid updates
       SearchPage.jsx               # /search — full live inventory with filters
-      WatchlistPage.jsx            # /watchlist — saved vehicles with live bid streaming
-      SavedAuctionsPage.jsx        # /saved — saved sellers
+      GaragePage.jsx               # /my-garage — saved vehicles with live bid streaming
       LoginPage.jsx                # /login
       AboutPage.jsx                # /about
     components/
@@ -80,7 +81,7 @@ frontend/
 - **`vehicles`** — one row per VIN, carrying its own `auction_id`, `current_bid`, `bid_expiration`. This is the source of truth for what's live; `vehicles_count` and `closes_at` shown per seller are computed live by aggregating this table, not stored separately.
 - **`historical_sales`** — final sale prices, independent of whether the vehicle row still exists.
 - **`odometer_history`** — TX inspection readings per VIN (`row_id` = `{vin}_{n}`, `_0` newest). `vehicles.last_recorded_odo` holds a display copy and `vehicles.odo_rollback` the rollback flag.
-- **`garage`** / **`saved_auctions`** — per-user saved vehicles/sellers; garage keeps its own copy of a vehicle's last-known fields so a saved vehicle still displays after it's gone from `vehicles`.
+- **`garage`** — per-user saved vehicles; keeps its own copy of a vehicle's last-known fields so a saved vehicle still displays after it's gone from `vehicles`.
 
 ## Local Setup
 
@@ -138,20 +139,11 @@ App at `http://localhost:5173`
 | GET | `/api/v1/auctions/:region_id` | Single seller summary |
 | GET | `/api/v1/auctions/:region_id/vehicles` | Live vehicles for a seller |
 | GET | `/api/v1/vehicles` | Search live inventory (make/model/year/region filters) |
-| GET | `/api/v1/vehicles/:vin/history` | Sale history for a VIN |
-| GET | `/api/v1/vehicles/:vin/odometer` | Odometer history for a VIN |
-| GET | `/api/v1/historical/stats` | Price range by make/model/year |
 | POST | `/api/v1/historical/stats/batch` | Price ranges for multiple make/model/year combos |
-| GET | `/api/v1/historical/search` | Search historical sales |
 | GET | `/api/v1/garage` | Saved vehicles (auth required) |
 | POST | `/api/v1/garage/:vin` | Add vehicle to garage (auth required) |
 | DELETE | `/api/v1/garage/:vin` | Remove vehicle from garage (auth required) |
-| GET | `/api/v1/saved-auctions` | Saved sellers (auth required) |
-| GET | `/api/v1/saved-auctions/check/:region_id` | Whether a seller is saved (auth required) |
-| POST | `/api/v1/saved-auctions/:region_id` | Save a seller (auth required) |
-| DELETE | `/api/v1/saved-auctions/:region_id` | Remove a saved seller (auth required) |
-| GET | `/api/v1/stream/auction/:auction_id` | SSE stream of live bid updates for one vehicle lot |
-| GET | `/api/v1/stream/multi?auctions=id1,id2` | Single SSE connection for multiple vehicle lots (watchlist/detail pages) |
+| GET | `/api/v1/stream/multi?auctions=id1,id2` | Single SSE connection for multiple vehicle lots (garage/detail pages) |
 | GET | `/api/v1/health` | Ably connection state, active SSE clients, live subscriptions |
 
 ## Deployment
