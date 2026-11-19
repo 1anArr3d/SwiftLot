@@ -1,16 +1,17 @@
+import { pic } from './adapt.js';
 // Photo gallery for certificates: inline viewer (arrows, counter, thumbnails) + full-screen lightbox with zoom and pan.
 // GAL.html(images, alt) returns markup; GAL.bind(root) wires every gallery inside root. One shared <dialog> for the lightbox.
 export const GAL = (() => {
   const html = (imgs, alt) => !imgs.length ? '<div class="photo gal-empty">No photos from the yard</div>' :
     `<div class="photo gal" data-imgs='${JSON.stringify(imgs).replace(/'/g, '&#39;')}' data-alt="${alt}" data-i="0">
-      <button class="gal-main" aria-label="Open photo full screen"><img src="${imgs[0]}" alt="${alt}, photo 1 of ${imgs.length}"></button>
+      <button class="gal-main" aria-label="Open photo full screen"><img src="${pic(imgs[0], 'MOBILE')}" alt="${alt}, photo 1 of ${imgs.length}"></button>
       ${imgs.length > 1 ? `<button class="gal-arrow prev" aria-label="Previous photo">‹</button><button class="gal-arrow next" aria-label="Next photo">›</button>` : ''}
       <span class="gal-count">1 / ${imgs.length}</span>
-      <div class="gal-thumbs">${imgs.map((s, i) => `<button aria-label="Photo ${i + 1}" aria-current="${i === 0}"><img src="${s}" alt=""></button>`).join('')}</div></div>`;
+      <div class="gal-thumbs">${imgs.map((s, i) => `<button aria-label="Photo ${i + 1}" aria-current="${i === 0}"><img src="${pic(s, 'THUMBNAIL')}" alt="" loading="lazy"></button>`).join('')}</div></div>`;
 
   function show(g, i) {
     const imgs = JSON.parse(g.dataset.imgs), n = imgs.length; i = (i + n) % n; g.dataset.i = i;
-    const m = g.querySelector('.gal-main img'); m.src = imgs[i]; m.alt = `${g.dataset.alt}, photo ${i + 1} of ${n}`;
+    const m = g.querySelector('.gal-main img'); m.src = pic(imgs[i], 'MOBILE'); m.alt = `${g.dataset.alt}, photo ${i + 1} of ${n}`;
     g.querySelector('.gal-count').textContent = `${i + 1} / ${n}`;
     g.querySelectorAll('.gal-thumbs button').forEach((b, k) => b.setAttribute('aria-current', k === i));
   }
@@ -64,7 +65,7 @@ export const GAL = (() => {
   function open(imgs, i, alt, done) {
     if (!dlg) build();
     Object.assign(st, { imgs, alt, done });
-    dlg.querySelector('.lb-thumbs').innerHTML = imgs.map((s, k) => `<button aria-label="Photo ${k + 1}"><img src="${s}" alt=""></button>`).join('');
+    dlg.querySelector('.lb-thumbs').innerHTML = imgs.map((s, k) => `<button aria-label="Photo ${k + 1}"><img src="${pic(s, 'THUMBNAIL')}" alt=""></button>`).join('');
     dlg.querySelectorAll('.lb-thumbs button').forEach((b, k) => b.onclick = () => go(k));
     dlg.querySelectorAll('.lb-arrow').forEach(b => b.hidden = imgs.length < 2);
     go(i); dlg.showModal();

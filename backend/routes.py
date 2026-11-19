@@ -7,6 +7,8 @@ from models import Auction, Vehicle, GarageVehicle
 from scrapers.autura import auction_listener as listener
 import asyncio
 import json
+import threading
+import time
 
 router = APIRouter(prefix="/api/v1")
 
@@ -120,6 +122,33 @@ def search_vehicles(
 
 
 # ── Historical Sales ──────────────────────────────────────────────────────────
+
+_ranges_cache = {"at": 0.0, "data": None, "busy": False}
+
+
+def _refresh_ranges():
+    try:
+        combos = query("SELECT DISTINCT make, model, year FROM vehicles WHERE make IS NOT NULL AND model IS NOT NULL AND year IS NOT NULL")
+        _ranges_cache["data"] = get_historical_stats_batch([dict(c) for c in combos])
+        _ranges_cache["at"] = time.time()
+    finally:
+        _ranges_cache["busy"] = False
+
+
+@router.get("/historical/stats/live", tags=["historical"])
+def live_price_ranges():
+    """
+    Price ranges for every live make/model/year, so pages fetch them alongside /vehicles instead of after.
+    Answers from memory; once older than 5 min the next call refreshes it in the background.
+    """
+    if _ranges_cache["data"] is None:
+        _ranges_cache["busy"] = True
+        _refresh_ranges()
+    elif time.time() - _ranges_cache["at"] > 300 and not _ranges_cache["busy"]:
+        _ranges_cache["busy"] = True
+        threading.Thread(target=_refresh_ranges, daemon=True).start()
+    return _ranges_cache["data"]
+
 
 _bids_cache: dict[str, tuple[float, dict]] = {}  # vin -> (fetched at, result)
 

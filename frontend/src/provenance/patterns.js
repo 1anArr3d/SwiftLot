@@ -1,3 +1,4 @@
+import { pic } from './adapt.js';
 // Guilloche pattern generators (pure SVG path math). All take a stroke colour; size is a 400x260 tile.
 export const PAT = (() => {
   const f = n => n.toFixed(1);
@@ -85,7 +86,7 @@ export const PAT = (() => {
   P.verdict = (v, g) => v.odo_rollback ? 'rb' : g != null && g <= 0 ? 'under' : 'over';
   P.lat = k => `<i class="lat ${k}" aria-hidden="true">${lattice}</i>`;
   const ros = (() => { let d = ''; for (let k = 0; k <= 500; k++) { const t = k / 500 * 2 * Math.PI; d += (k ? 'L' : 'M') + f2(27 + 17 * Math.cos(t) + 6 * Math.cos(11 * t)) + ' ' + f2(27 + 17 * Math.sin(t) - 6 * Math.sin(11 * t)); } return `<svg viewBox="0 0 54 54" aria-hidden="true"><path d="${d}" fill="none" stroke="#f3f0e4" stroke-width=".6"/></svg>`; })();
-  P.photo = (v, g) => { const k = P.verdict(v, g); return `<div class="ph"><img src="${v.images[0] || ''}" alt=""><span class="cseal ${k}">${ros}<b>${{ rb: 'ROLL<br>BACK', under: 'UNDER', over: 'OVER' }[k]}</b></span></div>`; };
+  P.photo = (v, g) => { const k = P.verdict(v, g); return `<div class="ph"><img src="${pic(v.images[0], 'MOBILE')}" alt="" loading="lazy"><span class="cseal ${k}">${ros}<b>${{ rb: 'ROLL<br>BACK', under: 'UNDER', over: 'OVER' }[k]}</b></span></div>`; };
   // nav brand: the Gilt coupe emblem and the Gold glint title. Drives in and glints on load; streams, spins and glints again on hover
   const BODY = 'M17.4 3.6Q18.6 3.4 18.5 1.6Q18.4 0 17.2-.6Q12-1.6 6.4-2.6Q3.8-5.4.4-5.9Q-4.2-6.4-8-4.6Q-12.6-3-16.6-2.3Q-18-1.8-18.1.4L-17.8 3.6H-14.8A3.4 3.4 0 0 1-8 3.6H7.6A3.4 3.4 0 0 1 14.4 3.6Z';
   const wheel = x => `<g transform="translate(${x} 3.4)"><circle r="2.9" fill="#11182f" stroke="#f3f0e4" stroke-width=".35"/><circle r="2" fill="none" stroke="#c9b26a" stroke-width=".3"/><g class="spin" stroke="#c9b26a" stroke-width=".35">${[0, 60, 120].map(a => `<path d="M0-1.9V1.9" transform="rotate(${a})"/>`).join('')}</g><circle r=".5" fill="#c9b26a"/></g>`;

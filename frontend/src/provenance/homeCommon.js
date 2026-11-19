@@ -1,3 +1,4 @@
+import { pic } from './adapt.js';
 import { SL } from './sl.js';
 import { ENG } from './engine.js';
 import { PAT } from './patterns.js';
@@ -9,7 +10,7 @@ export const HOME = (() => {
   const left = iso => { const ms = new Date(iso) - Date.now(), h = ms / 36e5; return h < 24 ? `${Math.floor(h)}h ${Math.floor(ms % 36e5 / 6e4)}m` : `${Math.floor(h / 24)}d ${Math.floor(h % 24)}h`; };
   const certHTML = v => { const b = bar(v); return `<article class="cert" id="heroCert">${(S=>`<div class="guil tile" style="background-image:${S.map(s=>s.img).join(',')};background-position:${S.map(s=>s.pos).join(',')};background-size:${S.map(s=>s.size).join(',')}"></div>`)(PAT.spots('#3f6b5c',v.vin,'value'))}${PAT.strip('value',v.vin,'VALUE')}
     <div class="c-head"><div><small>Certificate of lot value</small><h2>${title(v)}</h2></div><div class="no">Certificate no.<b>SL-${lot(v)}-${v.vin.slice(-6)}</b></div></div>
-    <div class="c-body"><div class="photo"><img src="${v.images[0] || ''}" alt="${title(v)}"></div>
+    <div class="c-body"><div class="photo"><img src="${pic(v.images[0], 'MOBILE')}" alt="${title(v)}" loading="lazy"></div>
      <div><div class="field"><small>Current bid</small><div class="big u">${money(v.current_bid)}</div><span style="font-size:13px">${gapText(v)}</span></div>
       ${b ? `<div class="bandbar"><i style="left:${b.lo}%;width:${b.hi - b.lo}%"></i><b style="left:${b.bid}%"></b></div><div class="vlab"><span>Typical ${money(v.price.low)}–${money(v.price.high)}</span><span>${v.price.count} sales</span></div>` : ''}
       <div class="field"><small>If you win now</small><b>${allInText(v)}</b></div></div></div>

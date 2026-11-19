@@ -1,3 +1,4 @@
+import { pic } from '../adapt.js';
 // Auction page, ported from design/provenance/auction.html. mount() builds the page inside root.
 import { D, SL } from '../sl.js';
 import { ENG } from '../engine.js';
@@ -130,7 +131,7 @@ const reveal=(v,el)=>{if(getComputedStyle(hero).position==='sticky')return;
 const hideBack=()=>{const r=hero.getBoundingClientRect();if(arriving){if(r.top>-20&&r.top<innerHeight/2)arriving=false;return}if(!back.hidden&&r.bottom<0)back.hidden=true};
 window.addEventListener('scroll',hideBack,{passive:true});onStop(()=>window.removeEventListener('scroll',hideBack));
 const list=run({keep,cmp,reveal,rowsEl:rows,rowH:106,rowClass:'mini',
- row:(v,c)=>{const b=bar(v),g=gap(v);return `<span class="stub">${PAT.lat(PAT.verdict(v,g))}<small>${c.pole?'Best':'Lot'}</small><b>${c.pos}</b></span><img src="${v.images[0]||''}" alt="">
+ row:(v,c)=>{const b=bar(v),g=gap(v);return `<span class="stub">${PAT.lat(PAT.verdict(v,g))}<small>${c.pole?'Best':'Lot'}</small><b>${c.pos}</b></span><img src="${pic(v.images[0],'THUMBNAIL')}" alt="" loading="lazy">
   <span class="body"><b>${title(v)}</b><small class="${v.odo_rollback?'bad':''}">${v.odo_rollback?'Odometer not actual':gapText(v)}</small>${b&&b.bid!=null?`<span class="mbar" aria-hidden="true"><i style="left:${b.lo}%;width:${b.hi-b.lo}%"></i><u style="left:${b.bid}%"></u></span>`:''}</span>
   <span class="bid ${g!=null&&g<=0?'u':''}">${money(v.current_bid)}<small>${allIn(v)!=null?money(allIn(v))+' all-in':'No bids'}</small></span>`},
  hero:draw});

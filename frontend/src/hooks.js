@@ -24,7 +24,8 @@ export function fetchPriceRanges(vehicles) {
 let lots = null;
 export function getLots() {
   if (!lots || Date.now() - lots.at > 60_000) {
-    const p = getJSON(`${API}/vehicles`).then(async vehicles => ({ vehicles, stats: await fetchPriceRanges(vehicles).catch(() => ({})) }));
+    const ranges = getJSON(`${API}/historical/stats/live`).then(d => Object.fromEntries(Object.entries(d).filter(([, s]) => s.count > 0))).catch(() => ({}));
+    const p = Promise.all([getJSON(`${API}/vehicles`), ranges]).then(([vehicles, stats]) => ({ vehicles, stats }));
     lots = { at: Date.now(), p };
     p.catch(() => { if (lots?.p === p) lots = null; });
   }

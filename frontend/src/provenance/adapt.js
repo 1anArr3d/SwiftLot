@@ -2,6 +2,8 @@
 import { parseImages, statsKey } from '../vehicles';
 
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+// Autura's CDN serves each photo at THUMBNAIL 320px, MOBILE 1280px and DESKTOP 1920px (what the API stores).
+export const pic = (s, size) => (s || '').replace('/IMAGE_DESKTOP/', `/IMAGE_${size}/`);
 export const esc = (s) => typeof s === 'string' ? s.replace(/[&<>"']/g, c => ESC[c]) : s;
 const escAll = (o, keys) => { const r = { ...o }; keys.forEach(k => { r[k] = esc(o[k]); }); return r; };
 
