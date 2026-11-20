@@ -77,10 +77,10 @@ function place(){const ids=COPIES.map(c=>c[0]),i=ids.indexOf(front),o=[front,...
 const cents=n=>'$'+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const feeBox=v=>{const n=nextBid(v),f=n==null?null:fees(v,n);if(!f)return '';
  const row=(k,a,cls='')=>`<div class="${cls}"><span>${k}</span><i></i><span>${cents(a)}</span></div>`;
- return `<details class="feebox"><summary>Fee breakdown for the next bid, ${money(n)}</summary>
+ return `<details class="feebox"><summary>Fee breakdown for the next bid, ${money(n)}</summary><div class="fb">
   ${row('Bid',f.bid,'h')}${row('Vehicle',f.bid)}
   ${row('Fees',f.platform+f.extra+f.card,'h')}${row(`Platform fee (${+((v.platform_fee_rate??0.125)*100).toFixed(2)}%)`,f.platform)}${f.extra?row('Seller fees',f.extra):''}${row('Card processing (3%)',f.card)}
-  ${row('Est. total',f.total,'t')}</details>`};
+  ${row('Est. total',f.total,'t')}</div></details>`};
 function draw(v){const b=bar(v),g=gap(v),pts=[...v.odometer].reverse(),no=`SL-${lot(v)}-${v.vin.slice(-6)}`;
  const shell=(k,label,inner)=>`<article class="cert copy-${k}" data-copy="${k}">${(S=>`<div class="guil tile" style="background-image:${S.map(s=>s.img).join(',')};background-position:${S.map(s=>s.pos).join(',')};background-size:${S.map(s=>s.size).join(',')}"></div>`)(PAT.spots({value:'#3f6b5c',odometer:'#35507a',vehicle:'#7a3f45'}[k],v.vin,k))}<div class="micro">${MICRO}</div><div class="micro b">${MICRO}</div>
    ${PAT.strip(k,v.vin,label,k==='odometer'&&v.odo_rollback)}${k==='value'?'':`<div class="sealspot">${SEAL[k](v)}</div>`}

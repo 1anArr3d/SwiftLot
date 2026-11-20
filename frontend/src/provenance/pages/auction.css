@@ -142,10 +142,13 @@
 .pg-auction .backlist{position:fixed;left:50%;bottom:20px;z-index:25;transform:translateX(-50%);height:44px;padding:0 20px;box-shadow:0 10px 24px -10px rgba(0,0,0,.5)}
 .pg-auction .lotnotes{margin:12px 0 0;padding:0;list-style:none;font:italic 500 15px/1.35 Cormorant;color:var(--ink2)}.pg-auction .lotnotes li{padding:3px 0 3px 14px;position:relative}.pg-auction .lotnotes li::before{content:'';position:absolute;left:0;top:.7em;width:6px;height:1px;background:currentColor}
 .pg-auction .bidhist{margin-top:14px;color:var(--ink2)}.pg-auction .bidhist small{font:500 11px 'Cormorant SC';letter-spacing:.12em}.pg-auction .bidhist svg{display:block;margin:6px 0 4px;color:var(--ink)}.pg-auction .bidhist p{margin:0;font-size:13px}
-.pg-auction .feebox{margin-top:10px;max-width:420px;font:13px 'IBM Plex Mono';color:var(--ink2)}
+.pg-auction .feebox{position:relative;margin-top:10px;max-width:420px;font:13px 'IBM Plex Mono';color:var(--ink2)}
 .pg-auction .feebox summary{cursor:pointer;font:italic 15px Cormorant;list-style-position:inside}
 .pg-auction .feebox summary:focus-visible{outline:2px solid var(--ink2);outline-offset:2px}
-.pg-auction .feebox div{display:flex;gap:6px;align-items:baseline;padding:1px 0 1px 12px}
-.pg-auction .feebox div i{flex:1;border-bottom:1px dotted #b9b3a2}
-.pg-auction .feebox .h,.pg-auction .feebox .t{padding-left:0;margin-top:6px;color:var(--ink);font-weight:600}
-.pg-auction .feebox .t{border-top:1px solid #b9b3a2;padding-top:4px}
+/* floats over the certificate instead of pushing bid history and buttons down */
+.pg-auction .feebox .fb{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:5;padding:8px 14px 10px;background:#f8f5ec;border:1px solid #b9b3a2;border-radius:3px;box-shadow:0 12px 28px -14px rgba(27,42,51,.55)}
+.pg-auction .feebox .fb>div{display:flex;gap:6px;align-items:baseline;padding:1px 0 1px 12px}
+.pg-auction .feebox .fb>div i{flex:1;border-bottom:1px dotted #b9b3a2}
+.pg-auction .feebox .fb>.h,.pg-auction .feebox .fb>.t{padding-left:0;margin-top:6px;color:var(--ink);font-weight:600}
+.pg-auction .feebox .fb>.h:first-child{margin-top:0}
+.pg-auction .feebox .fb>.t{border-top:1px solid #b9b3a2;padding-top:4px}
