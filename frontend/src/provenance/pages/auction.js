@@ -77,7 +77,7 @@ function place(){const ids=COPIES.map(c=>c[0]),i=ids.indexOf(front),o=[front,...
 const cents=n=>'$'+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const feeBox=v=>{const n=nextBid(v),f=n==null?null:fees(v,n);if(!f)return '';
  const row=(k,a,cls='')=>`<div class="${cls}"><span>${k}</span><i></i><span>${cents(a)}</span></div>`;
- return `<details class="feebox"><summary>Next bid ${money(n)}: ${cents(f.total)} all-in</summary>
+ return `<details class="feebox"><summary>Fee breakdown for the next bid, ${money(n)}</summary>
   ${row('Bid',f.bid,'h')}${row('Vehicle',f.bid)}
   ${row('Fees',f.platform+f.extra+f.card,'h')}${row(`Platform fee (${+((v.platform_fee_rate??0.125)*100).toFixed(2)}%)`,f.platform)}${f.extra?row('Seller fees',f.extra):''}${row('Card processing (3%)',f.card)}
   ${row('Est. total',f.total,'t')}</details>`};
@@ -90,7 +90,7 @@ function draw(v){const b=bar(v),g=gap(v),pts=[...v.odometer].reverse(),no=`SL-${
     <div><div class="field"><small>Held by</small><b style="font-size:15px">${D.auction.seller_name}, ${D.auction.seller_city}</b></div>
      <div class="value"><small>Current bid against comparable sales</small><div class="big ${g==null?'':g<=0?'u':'o'}">${money(v.current_bid)}</div><div style="font-size:13px">${gapText(v)}</div>
       ${b?`<div class="bandbar"><i style="left:${b.lo}%;width:${b.hi-b.lo}%"></i>${b.bid!=null?`<b style="left:${b.bid}%"></b>`:''}</div><div class="vlab"><span>Typical ${money(v.price.low)}–${money(v.price.high)}</span><span>${v.price.count} sales</span></div>`:''}</div>
-     <div class="grid2"><div class="field"><small>If you win now</small><b>${allInText(v)}</b></div><div class="field"><small>Bidding closes in</small><b>${timeLeft(v.bid_expiration)}</b></div></div>${feeBox(v)}
+     <div class="grid2"><div class="field"><small>If you win now</small><b>${allInText(v,nextBid(v))}</b></div><div class="field"><small>Bidding closes in</small><b>${timeLeft(v.bid_expiration)}</b></div></div>${feeBox(v)}
      ${lotNotes(v).length?`<ul class="lotnotes">${lotNotes(v).map(n=>`<li>${n}</li>`).join('')}</ul>`:''}<div class="bidhist" data-vin="${v.vin}"></div></div></div>
    <div class="foot">${SEAL.value(v)}<div style="display:flex;gap:10px"><button class="btn" data-save="${v.vin}" aria-pressed="${isSaved(v.vin)}">${isSaved(v.vin)?'Saved to garage':'Save to garage'}</button><a class="btn go" href="https://mp.autura.com/auctions/listings/${v.item_key}" target="_blank" rel="noreferrer" style="display:inline-grid;place-items:center;text-decoration:none">View listing on Autura</a></div></div>`)}
   ${shell('odometer','Odometer',`<div class="status"><span class="sc" style="font-size:13px;letter-spacing:.12em;color:var(--ink2)">Odometer status</span><label><i>${v.odometer.length>1&&!v.odo_rollback?'✓':''}</i>Actual</label><label><i>${v.odo_rollback?'✕':''}</i>Not actual</label></div>
