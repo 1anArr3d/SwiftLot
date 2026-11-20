@@ -33,7 +33,7 @@ export function mount(root, { onSave = () => {}, isSaved = () => false } = {}) {
   const clock = navr ? navr.querySelector('#clock') : document.createElement('span');
   const $ = id => root.querySelector('#' + id);
   const [seller, where, nlots, hero, rows, lq, lsort, ltog, lpanel, ldg, lnum, lcount] = ['seller', 'where', 'nlots', 'hero', 'rows', 'lq', 'lsort', 'ltog', 'lpanel', 'ldg', 'lnum', 'lcount'].map($);
-  const { money, miles, title, allIn, allInText, lotNotes, timeLeft, bar } = SL, { gap, gapText, lot, clock: clk, run } = ENG;
+  const { money, miles, title, fees, allIn, allInText, nextBid, lotNotes, timeLeft, bar } = SL, { gap, gapText, lot, clock: clk, run } = ENG;
 
 seller.textContent=D.auction.seller_name;where.textContent=`${D.auction.seller_city}, ${D.auction.seller_state}`;nlots.textContent=D.auction.vehicles_listed;
 every(()=>clock.textContent=clk(D.auction.closes_at),1000);clock.textContent=clk(D.auction.closes_at);
@@ -73,6 +73,14 @@ const chart=v=>{const p=[...v.odometer].reverse();if(p.length<2)return '';
 function place(){const ids=COPIES.map(c=>c[0]),i=ids.indexOf(front),o=[front,...ids.slice(i+1),...ids.slice(0,i)];
  hero.querySelectorAll('.stack .cert').forEach(c=>{const d=o.indexOf(c.dataset.copy);c.dataset.depth=d;c.style.zIndex=3-d});
  hero.querySelectorAll('.tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.copy===front))}
+// Autura-style price breakdown for the next bid Autura would accept
+const cents=n=>'$'+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const feeBox=v=>{const n=nextBid(v),f=n==null?null:fees(v,n);if(!f)return '';
+ const row=(k,a,cls='')=>`<div class="${cls}"><span>${k}</span><i></i><span>${cents(a)}</span></div>`;
+ return `<details class="feebox"><summary>Next bid ${money(n)}: ${cents(f.total)} all-in</summary>
+  ${row('Bid',f.bid,'h')}${row('Vehicle',f.bid)}
+  ${row('Fees',f.platform+f.extra+f.card,'h')}${row(`Platform fee (${+((v.platform_fee_rate??0.125)*100).toFixed(2)}%)`,f.platform)}${f.extra?row('Seller fees',f.extra):''}${row('Card processing (3%)',f.card)}
+  ${row('Est. total',f.total,'t')}</details>`};
 function draw(v){const b=bar(v),g=gap(v),pts=[...v.odometer].reverse(),no=`SL-${lot(v)}-${v.vin.slice(-6)}`;
  const shell=(k,label,inner)=>`<article class="cert copy-${k}" data-copy="${k}">${(S=>`<div class="guil tile" style="background-image:${S.map(s=>s.img).join(',')};background-position:${S.map(s=>s.pos).join(',')};background-size:${S.map(s=>s.size).join(',')}"></div>`)(PAT.spots({value:'#3f6b5c',odometer:'#35507a',vehicle:'#7a3f45'}[k],v.vin,k))}<div class="micro">${MICRO}</div><div class="micro b">${MICRO}</div>
    ${PAT.strip(k,v.vin,label,k==='odometer'&&v.odo_rollback)}${k==='value'?'':`<div class="sealspot">${SEAL[k](v)}</div>`}
@@ -82,7 +90,7 @@ function draw(v){const b=bar(v),g=gap(v),pts=[...v.odometer].reverse(),no=`SL-${
     <div><div class="field"><small>Held by</small><b style="font-size:15px">${D.auction.seller_name}, ${D.auction.seller_city}</b></div>
      <div class="value"><small>Current bid against comparable sales</small><div class="big ${g==null?'':g<=0?'u':'o'}">${money(v.current_bid)}</div><div style="font-size:13px">${gapText(v)}</div>
       ${b?`<div class="bandbar"><i style="left:${b.lo}%;width:${b.hi-b.lo}%"></i>${b.bid!=null?`<b style="left:${b.bid}%"></b>`:''}</div><div class="vlab"><span>Typical ${money(v.price.low)}–${money(v.price.high)}</span><span>${v.price.count} sales</span></div>`:''}</div>
-     <div class="grid2"><div class="field"><small>If you win now</small><b>${allInText(v)}</b></div><div class="field"><small>Bidding closes in</small><b>${timeLeft(v.bid_expiration)}</b></div></div>
+     <div class="grid2"><div class="field"><small>If you win now</small><b>${allInText(v)}</b></div><div class="field"><small>Bidding closes in</small><b>${timeLeft(v.bid_expiration)}</b></div></div>${feeBox(v)}
      ${lotNotes(v).length?`<ul class="lotnotes">${lotNotes(v).map(n=>`<li>${n}</li>`).join('')}</ul>`:''}<div class="bidhist" data-vin="${v.vin}"></div></div></div>
    <div class="foot">${SEAL.value(v)}<div style="display:flex;gap:10px"><button class="btn" data-save="${v.vin}" aria-pressed="${isSaved(v.vin)}">${isSaved(v.vin)?'Saved to garage':'Save to garage'}</button><a class="btn go" href="https://mp.autura.com/auctions/listings/${v.item_key}" target="_blank" rel="noreferrer" style="display:inline-grid;place-items:center;text-decoration:none">View listing on Autura</a></div></div>`)}
   ${shell('odometer','Odometer',`<div class="status"><span class="sc" style="font-size:13px;letter-spacing:.12em;color:var(--ink2)">Odometer status</span><label><i>${v.odometer.length>1&&!v.odo_rollback?'✓':''}</i>Actual</label><label><i>${v.odo_rollback?'✕':''}</i>Not actual</label></div>
