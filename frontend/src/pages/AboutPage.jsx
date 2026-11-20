@@ -20,7 +20,7 @@ export default function AboutPage() {
           <h2>What we can't tell you</h2>
           <ul>
             <li>Mechanical condition — inspect in person when the yard allows it.</li>
-            <li>Odometer history outside Texas.</li>
+            <li>Odometer history outside Texas. We show the mileage the seller lists on Autura when there is one, dated the day we first saw it.</li>
             <li>Title problems beyond what the yard lists.</li>
           </ul>
         </article>

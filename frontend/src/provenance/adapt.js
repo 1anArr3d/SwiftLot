@@ -16,11 +16,19 @@ export const odometer = (s) => (s || '').split('\n')
   .map(m => ({ date: m[1], miles: +m[2].replace(/,/g, '') }));
 
 // stats: the /historical/stats/batch result, keyed by the raw make|model|year
+// Adds Autura's listed mileage, dated the day we first fetched it, to the inspection readings (still newest first).
+const withAutura = (pts, miles, at) => {
+  if (!miles || !at || pts.some(p => p.miles === miles)) return pts;
+  const [y, m, d] = at.split('-').map(Number);
+  const t = p => { const [pm, pd, py] = p.date.split('/').map(Number); return py * 1e4 + pm * 100 + pd; };
+  return [...pts, { date: `${m}/${d}/${y}`, miles }].sort((a, b) => t(b) - t(a));
+};
+
 export const toLot = (v, stats = {}) => ({
   ...escAll(v, VEHICLE_TEXT),
   images: (Array.isArray(v.images) ? v.images : parseImages(v.images)).map(esc),
   price: stats[statsKey(v)] || null,
-  odometer: odometer(v.last_recorded_odo),
+  odometer: withAutura(odometer(v.last_recorded_odo), v.autura_odo, v.autura_odo_at),
 });
 
 export const toAuction = (a) => a && escAll(a, ['seller_name', 'seller_city', 'seller_state', 'region_id']);

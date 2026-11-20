@@ -240,7 +240,8 @@ def init_db():
         for col, typ in (("reserve_met", "BOOLEAN"), ("bidding_status", "TEXT"), ("bidding_start", "TEXT"),
                          ("run_number", "INTEGER"), ("platform_fee_rate", "DOUBLE PRECISION"),
                          ("platform_fee_min", "DOUBLE PRECISION"), ("platform_fee_max", "DOUBLE PRECISION"),
-                         ("card_fee_rate", "DOUBLE PRECISION"), ("extra_fees", "DOUBLE PRECISION")):
+                         ("card_fee_rate", "DOUBLE PRECISION"), ("extra_fees", "DOUBLE PRECISION"),
+                         ("autura_odo", "INTEGER"), ("autura_odo_at", "TEXT")):
             conn.execute(f"ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS {col} {typ}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_auction_id ON vehicles (auction_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicles_region_id ON vehicles (region_id)")

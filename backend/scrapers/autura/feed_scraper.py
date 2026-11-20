@@ -6,21 +6,18 @@ auctions, and historical_sales in one pass. Replaces auction_scraper.py
 and auction_discovery.py.
 """
 import json
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from db import get_db, query
 from .autura_api import get_all_feed, get_all_sellers, get_lot, get_bids
 
 
 # ── Parsing helpers ───────────────────────────────────────────────────────────
 
-def _parse_odo(val) -> str | None:
-    if val is None:
-        return None
-    try:
-        int(str(val).replace(",", "").strip())
-        return str(val)
-    except (ValueError, TypeError):
-        return None
+def _parse_odo(val) -> int | None:
+    """Autura sends "154,494 miles" or "Unknown mileage"."""
+    m = re.match(r"\s*([\d,]+)", str(val or ""))
+    return int(m.group(1).replace(",", "")) if m else None
 
 
 def _extract_cylinders(engine_str: str | None) -> str | None:
@@ -102,7 +99,8 @@ def _listing_to_vehicle_row(listing: dict, seller_cfg: dict | None = None) -> di
         "images":             json.dumps(thumb_urls),
         "images_count":       len(thumb_urls),
         "published_at":       listing.get("updatedAt"),
-        "last_recorded_odo":  _parse_odo(details.get("odometer")),
+        "autura_odo":         _parse_odo(details.get("odometer")),
+        "autura_odo_at":      date.today().isoformat(),
     }
 
 
@@ -138,7 +136,7 @@ def _upsert_vehicle(conn, listing: dict, seller_cfg: dict | None = None):
              documentation_type, auction_id, region_id, seller_id, item_id, item_key,
              current_bid, bid_expiration, min_bid, reserve_met, bidding_status, bidding_start,
              run_number, platform_fee_rate, platform_fee_min, platform_fee_max, card_fee_rate,
-             extra_fees, seller_notes, images, images_count, published_at, last_recorded_odo)
+             extra_fees, seller_notes, images, images_count, published_at, autura_odo, autura_odo_at)
         VALUES
             (%(vin)s, %(year)s, %(make)s, %(model)s, %(body_type)s, %(color)s,
              %(key_status)s, %(catalytic_converter)s, %(start_status)s, %(engine_type)s,
@@ -148,7 +146,7 @@ def _upsert_vehicle(conn, listing: dict, seller_cfg: dict | None = None):
              %(bidding_status)s, %(bidding_start)s, %(run_number)s, %(platform_fee_rate)s,
              %(platform_fee_min)s, %(platform_fee_max)s, %(card_fee_rate)s, %(extra_fees)s,
              %(seller_notes)s, %(images)s, %(images_count)s, %(published_at)s,
-             %(last_recorded_odo)s)
+             %(autura_odo)s, %(autura_odo_at)s)
         ON CONFLICT (vin) DO UPDATE SET
             auction_id      = EXCLUDED.auction_id,
             current_bid     = EXCLUDED.current_bid,
@@ -170,7 +168,11 @@ def _upsert_vehicle(conn, listing: dict, seller_cfg: dict | None = None):
             item_id         = EXCLUDED.item_id,
             seller_id       = EXCLUDED.seller_id,
             region_id       = EXCLUDED.region_id,
-            seller_notes    = EXCLUDED.seller_notes
+            seller_notes    = EXCLUDED.seller_notes,
+            -- dated the day we first saw this reading, so it slots into the odometer history
+            autura_odo_at   = CASE WHEN vehicles.autura_odo IS DISTINCT FROM EXCLUDED.autura_odo
+                                   THEN EXCLUDED.autura_odo_at ELSE vehicles.autura_odo_at END,
+            autura_odo      = EXCLUDED.autura_odo
         """,
         row,
     )

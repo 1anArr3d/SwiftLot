@@ -39,14 +39,14 @@ export const LEDGER = (() => {
     const group = (k, label) => { const o = uniq(k); return o.length > 1 ? `<div><small>${label}</small>${chips(k, o)}</div>` : ''; };
 
     function draw() {
-      const tags = [...['verdict', ...FACETS].flatMap(k => [...s[k]].map(o => [k + '|' + o, k === 'verdict' ? VL[o] : o])), ...Object.keys(R).filter(k => s[k]).map(k => [k + '|', picked(k)]), ...(s.hasOdo ? [['hasOdo|', 'Has TX odometer records']] : [])];
+      const tags = [...['verdict', ...FACETS].flatMap(k => [...s[k]].map(o => [k + '|' + o, k === 'verdict' ? VL[o] : o])), ...Object.keys(R).filter(k => s[k]).map(k => [k + '|', picked(k)]), ...(s.hasOdo ? [['hasOdo|', 'Has odometer records']] : [])];
       const models = uniq('model').filter(m => !s.make.size || V.some(v => v.model === m && s.make.has(v.make)));
       const cond = group('start_status', 'Runs') + group('engine_type', 'Engine') + group('drivetrain', 'Drivetrain');
       el.innerHTML = `<div class="ltags">${tags.map(([k, l]) => `<button type="button" data-tag="${k}" aria-label="Remove filter ${l}">${l}</button>`).join('')}</div>
         ${acc('Value', ['verdict'], chips('verdict', ['under', 'over', 'rb'], o => VL[o], true))}
         ${acc('Make', ['make', 'model'], chips('make', uniq('make')) + (s.make.size ? `<div class="lsub"><small>Models</small>${chips('model', models)}</div>` : ''))}
         ${acc('Year', ['year'], range('year'))}${acc('Price', ['bid'], range('bid'))}
-        ${acc('Odometer', ['miles', 'hasOdo'], range('miles') + `<label class="lck"><input type="checkbox" data-ck="hasOdo" ${s.hasOdo ? 'checked' : ''}>Only cars with Texas odometer records</label>`)}
+        ${acc('Odometer', ['miles', 'hasOdo'], range('miles') + `<label class="lck"><input type="checkbox" data-ck="hasOdo" ${s.hasOdo ? 'checked' : ''}>Only cars with odometer records</label>`)}
         ${cond ? acc('Condition', ['start_status', 'engine_type', 'drivetrain'], `<div class="lgrid">${cond}</div>`) : ''}
         <div class="lfoot"><button type="button" class="btn lclear" data-clear ${active() ? '' : 'disabled'}>Clear</button>${onDone ? `<button type="button" class="btn ldone" data-done>Show ${total()} lots</button>` : `<span>${total()} of ${V.length} lots</span>`}</div>`;
     }

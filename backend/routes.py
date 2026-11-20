@@ -207,7 +207,7 @@ def get_garage(user_id: str = Depends(get_current_user)):
                v.run_number, v.platform_fee_rate, v.platform_fee_min, v.platform_fee_max,
                v.card_fee_rate, v.extra_fees, v.seller_notes,
                v.images, v.images_count, v.published_at, v.last_recorded_odo,
-               v.odo_rollback, w.liked_at
+               v.autura_odo, v.autura_odo_at, v.odo_rollback, w.liked_at
         FROM garage w
         JOIN vehicles v ON v.vin = w.vin
         WHERE w.user_id = %s
@@ -222,7 +222,7 @@ def get_garage(user_id: str = Depends(get_current_user)):
                NULL, NULL, NULL, NULL,
                NULL, NULL, NULL,
                w.images, w.images_count, NULL, w.last_recorded_odo,
-               FALSE, w.liked_at
+               NULL, NULL, FALSE, w.liked_at
         FROM garage w
         WHERE w.user_id = %s
           AND NOT EXISTS (SELECT 1 FROM vehicles v WHERE v.vin = w.vin)

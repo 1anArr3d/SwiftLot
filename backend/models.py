@@ -51,6 +51,8 @@ class Vehicle(BaseModel):
     images_count: Optional[int] = None
     published_at: Optional[str] = None
     last_recorded_odo: Optional[str] = None
+    autura_odo: Optional[int] = None
+    autura_odo_at: Optional[str] = None
     odo_rollback: Optional[bool] = False
     seller_name: Optional[str] = None
     closes_at: Optional[str] = None
