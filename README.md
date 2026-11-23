@@ -1,100 +1,97 @@
 # SwiftLot
 
-A full-stack auction intelligence platform built to give buyers a real edge at salvage vehicle auctions. It reverse-engineers the Autura Marketplace API to discover active auctions nationwide, scrapes full vehicle listings in a single feed pass, and enriches every Texas vehicle with real odometer history pulled from the state inspection database.
-
-Built for the first-time auction buyer who walks in blind and leaves with a bad deal, and turns that experience into something data-driven and repeatable.
+SwiftLot helps first-time buyers at tow-yard and salvage auctions avoid overpaying. For every live lot on the Autura Marketplace it shows what similar cars actually sold for, what you'd really pay once fees are added, and, for Texas cars, whether the odometer was rolled back.
 
 Live at [swift-lot.com](https://swift-lot.com)
 
-## Features
+![Home page: the best-value lot shown as a certificate of lot value](docs/screenshots/home.jpg)
 
-- **Bid history** — `GET /api/v1/vehicles/{vin}/bids` returns a lot's bids (amount and time only, cached 30s) from Autura's bid history; the lot certificate plots it.
-- **Lot status** — reserve met/not met, pre-bid vs live phase and relist count come from the feed (`reserve_met`, `bidding_status`, `bidding_start`, `run_number`). `backend/tools/autura_findings_test.py` re-checks these and the fee formula against the live site; `backend/tools/autura_recon.py` records what Autura's site talks to (read-only).
-- **Real-time bid streaming** — backend subscribes to Autura's Ably WebSocket feed for every lot that is live or within 3 hours of its live hour (where nearly all bidding happens), so `current_bid` is live on every page, not just open auctions. `NEW_BID` events carry the standing bid (`inventory.winningBid`, in cents), so updates reach the frontend with zero extra HTTP calls. The buyer's all-in price is worked out in the frontend from that bid with Autura's own fee formula (platform fee per lot/seller from `/sellers`, 3% card processing), stored per lot as `platform_fee_*`, `card_fee_rate` and `extra_fees`. Autura's Ably fails attaches past ~200 channels per connection, so lots are spread over a pool of connections, 150 channels each (fewer than the ≈7 needed to cover all ~1,000 lots)
-- **Single-pass feed scrape** — one paginated crawl of `mp.autura.com/auctions.data` returns vehicle details, bidding info, and seller info together; no per-auction or per-vehicle follow-up calls needed
-- **VIN-based lifecycle tracking** — a vehicle whose VIN drops out of the active feed has its final price read from Autura's bid history (kept when the reserve was met) and is removed outright, instead of being flagged and left to accumulate
-- Discovers active auctions across all active sellers nationwide (no hardcoded state list)
-- Solves Cloudflare Turnstile on the TX state inspection site via Playwright, then fetches up to 5 years of odometer readings per VIN via authenticated HTTP
-- **Odometer rollback detection** — flags a vehicle when a newer inspection records more than 2,000 fewer miles than an older one, ignoring single out-of-line readings (inspector typos); shown as a "Possible rollback" badge
-- Captures final sale prices from completed auctions and shows a **price range** (25th–75th percentile) per vehicle from the closest match with 5+ sales: same year/make/model, then ±2 years, then any year. Truncated makes (`CHEVROL` → `CHEVROLET`) and punctuation variants (`F - 150` → `F150`) are merged; trims are not
-- Firebase Auth — per-user garage (saved vehicles)
-- Garage snapshots preserve a vehicle's last-known data after it sells or is pulled, so saved vehicles are never lost
-- Filterable UI by year range, make, model, start status, engine, drivetrain, odometer range
+## What it does
+
+**Is it a good price?** Every lot is compared with final sale prices of the same year, make and model. The lot shows a typical price range (25th to 75th percentile). If there are fewer than 5 matching sales, it widens to ±2 years, then to any year. The green, blue or red seal on each photo gives the verdict at a glance.
+
+**What will I actually pay?** "If you win now" is the all-in price at the next bid Autura will accept: the bid, plus the platform fee (12.5% unless the seller sets their own rate), plus 3% card processing. The fee formula and the bid increments come from Autura's own frontend code, and the total matches Autura's checkout to the cent. A dropdown breaks the total down the way Autura does.
+
+![Lot certificate with the fee breakdown open](docs/screenshots/auction-fees.jpg)
+
+**Was the odometer rolled back?** For Texas cars, SwiftLot pulls up to 5 years of state inspection readings for the VIN. A drop of more than 2,000 miles flags a possible rollback. A single reading that's out of line with its neighbours is treated as an inspector typo, so it doesn't flag an honest car. If the seller lists a mileage on Autura, it's added to the history, dated the day we first saw it.
+
+![Odometer certificate: Texas inspection readings plus the seller-listed mileage](docs/screenshots/auction-odometer.jpg)
+
+**Live bids, no refresh.** An open auction page updates bids, all-in prices and countdowns as they happen. Lots that sell drop off within seconds. Each lot also shows its bid history as a chart, plus plain-language notes: reserve not met, pre-bidding or live, relisted for the Nth time.
+
+**Every lot in one place.** Search and filter all ~600 live lots by value, make, model, year, price, odometer and condition. Browse sales by state, or by how soon they close. Signed-in users can save cars to a garage, and a saved car stays visible after it sells.
+
+<p>
+  <img src="docs/screenshots/auctions.jpg" alt="Notices of sale: every live tow-yard sale, filterable by state" width="49%">
+  <img src="docs/screenshots/search.jpg" alt="Search every lot with filters and value seals" width="49%">
+</p>
+
+<p align="center"><img src="docs/screenshots/mobile.jpg" alt="Lot certificate on a phone" width="300"></p>
+
+## How it works
+
+```
+Autura feed (every 30 min) ─┐
+Autura Ably (live bids)  ───┼─▶ FastAPI + Postgres ──REST + SSE──▶ React site (Cloudflare Pages)
+TX inspection site       ───┘
+```
+
+- **Feed scrape:** one paginated crawl of `mp.autura.com/auctions.data` returns vehicle, bidding and seller details together, with no per-lot follow-up calls. It runs on startup and every 30 minutes. Lots in their live hour are re-read every 3 minutes.
+- **Live bids:** the backend subscribes to Autura's Ably channels for lots that are live, or within 3 hours of their live hour, plus any lot someone has open. Autura's Ably refuses more than about 200 channels per connection, so channels are spread over a pool of connections, 150 each. Each `NEW_BID` carries the standing bid. The backend forwards a snapshot to open pages over Server-Sent Events.
+- **Ended lots:** Autura's `AUCTION_UPDATED` ping makes the backend re-read that lot. Once the lot page is gone, the final price is read from Autura's bid history (which outlives the listing) into `historical_sales`, and the lot is removed. The 30-minute scrape catches anything the ping missed.
+- **Fees:** each lot stores its seller's platform fee settings (`platform_fee_rate/min/max`), the card rate and any extra fees. The frontend computes the all-in price from the live bid, so it never goes stale.
+- **Odometer:** Playwright solves Cloudflare Turnstile on the Texas inspection site once. Lookups then reuse that session over plain HTTP, one VIN at a time (see Notes).
 
 ## Stack
 
-- **Backend** — Python, FastAPI, Playwright, curl_cffi, PostgreSQL (Neon)
-- **Frontend** — React 19, Vite, React Router
-- **Auth** — Firebase Authentication
-- **Realtime** — Ably WebSocket (Autura's feed) in, FastAPI SSE (`StreamingResponse`) out
-- **Infra** — Hetzner (backend + systemd), Cloudflare Pages (frontend), Cloudflare DNS/CDN
+- **Backend:** Python, FastAPI, PostgreSQL (Neon), Playwright, curl_cffi, Ably
+- **Frontend:** React 19, Vite, React Router, with hand-written HTML/CSS for the certificate design
+- **Auth:** Firebase Authentication
+- **Infra:** Hetzner (backend, systemd), Cloudflare Pages (frontend), Cloudflare DNS/CDN
 
-## Project Structure
+## Project structure
 
 ```
 backend/
-  main.py                      # FastAPI app entry point, startup scrape + scheduler threads
-  config.py                    # Environment config (.env loader)
-  db.py                        # PostgreSQL connection pool, schema init/migration
-  models.py                    # Pydantic response models
-  auth.py                      # Firebase ID token verification
-  routes.py                    # All API route handlers (incl. SSE /stream endpoints)
-  pricing.py                   # Price ranges + make/model name merging (in-memory, hourly refresh)
-  test_pricing.py              # Self-check for pricing levels and name merging
-  import_historical.py         # One-off: load historical_sales.csv into Postgres
-  test_inspection.py           # Manual test: inspection batch against the DB, with timing
-  test_rollback.py             # Self-check for rollback detection on real readings
-  dump_inspection.py           # Dumps raw mytxcar pages; reproduces the shared-session bug
-  survey_inspection.py         # Surveys ~100 VINs: page contents, timings, row-picking strategies
+  main.py                    # App entry: startup scrape, background threads (30-min scrape, 3-min live refresh, Ably watchdog)
+  routes.py                  # All API routes, incl. the SSE stream and bid history
+  db.py                      # Connection pool, schema + migrations (run on startup)
+  models.py, auth.py, config.py
+  pricing.py                 # Price ranges and make/model name merging (CHEVROL → Chevrolet, F - 150 → F150)
   scrapers/autura/
-    autura_api.py              # HTTP client — login, turbo-stream decoding, feed/seller pagination
-    feed_scraper.py            # Single-pass feed scrape: upserts vehicles + sellers,
-                                #   detects ended vehicles (VIN diff), records final bids
-    auction_listener.py        # Ably subscriptions (lots live or about to be, pooled connections), SSE broadcast,
-                                #   AUCTION_UPDATED -> lot re-read, 5-min resync, 3-min live-lot refresh
-    inspection_scraper.py       # Playwright session + HTTP batch fetch for TX odometer history
+    autura_api.py            # Autura client: login, turbo-stream decoding, feed, sellers, lot, bid history
+    feed_scraper.py          # Feed upsert, fee settings, ended lots, final price from bid history
+    auction_listener.py      # Ably connection pool, SSE broadcast, AUCTION_UPDATED handling
+    inspection_scraper.py    # Texas inspection odometer history and rollback check
+  tools/
+    autura_findings_test.py  # Re-checks the fee formula, feed fields and Ably events against the live site
+    autura_recon.py          # Headless browser that records what Autura's site calls (read-only, never bids)
+  test_*.py                  # Self-checks: listener, pricing, rollback, inspection
 
-frontend/
-  src/
-    App.jsx                        # Routes
-    api.js                         # API base URL, getJSON / authFetch (throw on non-2xx)
-    AuthContext.jsx                # Firebase auth context
-    hooks.js                       # fetchPriceRanges, usePageData, useLiveBids, useGarage
-    pages/                         # Thin React pages: fetch data, then mount a Provenance page
-      HomePage.jsx                 # /
-      AuctionsPage.jsx             # /auctions — notices of sale with state/finder filters
-      AuctionDetailPage.jsx        # /auctions/:id?vin= — lot list + three-copy certificate, live bids
-      SearchPage.jsx               # /search — every lot, Ledger filters
-      GaragePage.jsx               # /garage — saved vehicles (sign-in required)
-      LoginPage.jsx, AboutPage.jsx, NotFoundPage.jsx
-    provenance/                    # The "Provenance" certificate design (ported from design/provenance)
-      holo.css, banknote.css, shell.css
-      Nav.jsx, Printing.jsx        # Nav bar with gilded logo; loading / could-not-load card
-      Provenance.jsx               # Hosts a page's mount(), routes in-app links, stops timers on unmount
-      adapt.js                     # API rows -> page data (parsed photos, odometer readings, price range; text escaped)
-      sl.js, engine.js, patterns.js, ledger.js, gallery.js, holo.js, homeCommon.js, life.js
-      pages/                       # One mount() + scoped CSS per page
+frontend/src/
+  pages/                     # Thin React pages: fetch data, then mount a certificate page
+  provenance/                # The certificate design: shared CSS, nav, gallery, filters, fee math (sl.js)
+    adapt.js                 # API rows → page data (photo sizes, odometer history, escaping)
+    pages/                   # One mount() + scoped CSS per page
+  hooks.js                   # Shared data loading, live-bid stream, garage
+
+docs/                        # Autura API notes, architecture notes, screenshots
 ```
 
 ## Data model
 
-"Auction" in the UI means a seller's sale event, but Autura's own `auction_id` is per-vehicle lot (each listing gets its own id and closing time, staggered seconds apart in a run). So:
+In the UI an "auction" is a seller's sale event. Autura's own `auction_id` is per lot: each car gets its own id and closing time.
 
-- **`sellers`** — static-ish metadata per seller (name, city, state, region_id). No status or bidding fields.
-- **`vehicles`** — one row per VIN, carrying its own `auction_id`, `current_bid`, `bid_expiration`. This is the source of truth for what's live; `vehicles_count` and `closes_at` shown per seller are computed live by aggregating this table, not stored separately.
-- **`historical_sales`** — final sale prices, independent of whether the vehicle row still exists.
-- **`odometer_history`** — TX inspection readings per VIN (`row_id` = `{vin}_{n}`, `_0` newest). `vehicles.last_recorded_odo` holds a display copy and `vehicles.odo_rollback` the rollback flag.
-- **`garage`** — per-user saved vehicles; keeps its own copy of a vehicle's last-known fields so a saved vehicle still displays after it's gone from `vehicles`.
+- **`vehicles`:** one row per live VIN, with its bid, closing time, phase, reserve status, fee settings, photos, and odometer fields. `last_recorded_odo` holds the Texas history and `autura_odo`/`autura_odo_at` the seller-listed mileage. A row is deleted when the lot ends, so this table is exactly what's live.
+- **`sellers`:** name, city and state per seller.
+- **`historical_sales`:** final sale prices, which drive the price ranges.
+- **`odometer_history`:** Texas inspection readings per VIN.
+- **`garage`:** each user's saved cars, with a copy of the car's last-known details so it still shows after the lot ends.
 
-## Local Setup
+## Local setup
 
-### Prerequisites
-
-- Python 3.10+
-- Node.js 20+
-- PostgreSQL
-
-### Backend
+Prerequisites: Python 3.10+, Node.js 20+, PostgreSQL.
 
 ```bash
 cd backend
@@ -107,58 +104,51 @@ Create `backend/.env`:
 ```
 DATABASE_URL=postgresql://swiftlot:swiftlot@localhost:5432/swiftlot
 ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
-FIREBASE_CREDENTIALS=swiftlot-firebase-adminsdk-fbsvc-d64100172c.json
+FIREBASE_CREDENTIALS=your-firebase-adminsdk.json
 AUTURA_EMAIL=your@email.com
 AUTURA_PASSWORD=yourpassword
 ADMIN_UID=your_firebase_uid
 ```
 
-Start the server:
-
 ```bash
-python main.py
+python main.py          # API at http://127.0.0.1:8000, docs at /docs, hot reload on
 ```
 
-- API: `http://127.0.0.1:8000`
-- Swagger docs: `http://127.0.0.1:8000/docs`
-- Hot reload is enabled — no restart needed on code changes
-- On startup it runs a full feed scrape in the background, then rescrapes every 30 minutes (new lots, pre-bid changes) and re-reads lots in their live hour every 3 minutes (reserve, phase, end time). The sale price of each ended lot comes from its bid history. Autura's `AUCTION_UPDATED` ping re-reads that one lot, so sold or pulled lots leave within seconds and their sale is recorded straight away. Ably subscriptions cover lots that are live or within 3 hours of their live hour, plus any lot someone has open
-
-### Frontend
+The schema is created or migrated on startup, followed by a full feed scrape in the background.
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev             # http://localhost:5173 (talks to 127.0.0.1:8000 in dev)
 ```
 
-App at `http://localhost:5173`
-
-## API Endpoints
+## API
 
 | Method | Endpoint | Description |
-|--------|----------|--------------|
-| GET | `/api/v1/auctions` | All sellers with at least one live vehicle |
-| GET | `/api/v1/auctions/:region_id` | Single seller summary |
-| GET | `/api/v1/auctions/:region_id/vehicles` | Live vehicles for a seller |
-| GET | `/api/v1/vehicles` | Search live inventory (make/model/year/region filters) |
-| POST | `/api/v1/historical/stats/batch` | Price ranges for multiple make/model/year combos |
-| GET | `/api/v1/garage` | Saved vehicles (auth required) |
-| POST | `/api/v1/garage/:vin` | Add vehicle to garage (auth required) |
-| DELETE | `/api/v1/garage/:vin` | Remove vehicle from garage (auth required) |
-| GET | `/api/v1/stream/multi?auctions=id1,id2` | Single SSE connection for multiple vehicle lots (garage/detail pages) |
-| GET | `/api/v1/health` | Ably connections (channels + state each), subscribed lot count, active SSE clients |
+|--------|----------|-------------|
+| GET | `/api/v1/auctions` | Sellers with at least one live lot |
+| GET | `/api/v1/auctions/:region_id` | One seller's summary |
+| GET | `/api/v1/auctions/:region_id/vehicles` | That seller's live lots |
+| GET | `/api/v1/vehicles` | All live lots (make/model/year/region filters) |
+| GET | `/api/v1/vehicles/:vin/bids` | Bid history: amount and time only, no bidder details (cached 30s) |
+| GET | `/api/v1/historical/stats/live` | Price ranges for every live make/model/year (served from memory, refreshed every 5 min) |
+| POST | `/api/v1/historical/stats/batch` | Price ranges for a list of make/model/year combos |
+| GET / POST / DELETE | `/api/v1/garage[/:vin]` | Saved cars (sign-in required) |
+| GET | `/api/v1/stream/multi?auctions=id1,id2` | SSE stream of live bid snapshots and "ended" events |
+| GET | `/api/v1/health` | Ably connections, subscribed lot count, open streams |
 
 ## Deployment
 
-**Backend** runs on Hetzner at `/opt/swiftlot/`. The systemd service starts uvicorn with `xvfb-run --auto-servernum` so the inspection scraper's headed Playwright session works on a headless Linux server.
+- **Frontend:** Cloudflare Pages builds and deploys on every push to `main`.
+- **Backend:** runs on Hetzner at `/opt/swiftlot/` as the `swiftlot` systemd service. That's uvicorn on port 8002 under `xvfb-run`, so the inspection scraper's headed Playwright works on a headless server. To deploy:
 
-**Frontend** is deployed via Cloudflare Pages, connected directly to the GitHub repo. Pushing to `main` triggers an automatic build and deploy — no server involvement needed.
+```bash
+cd /opt/swiftlot && git fetch && git reset --hard origin/main && systemctl restart swiftlot
+```
 
 ## Notes
 
-- Inspection scraper uses Playwright with `headless=False` to bypass Cloudflare Turnstile on mytxcar.org, then reuses the acquired session for all subsequent VIN lookups via HTTP
-- **Inspection lookups run on one worker, on purpose.** mytxcar is ASP.NET WebForms: the server keeps each session's last search, and the detail request only says "row N of my last search". With 8 threads sharing one session, a lookup's detail request was answered from another thread's search, saving other cars' mileage. `dump_inspection.py` reproduced it (6 of 8 VINs wrong in parallel, 0 sequentially). Lookups are now sequential (~0.5 s per VIN), every detail page is checked for the searched VIN before saving, and a VIN's old rows are cleared on each save
-- "Safety Only" inspection pages label the reading `Odometer Reading` rather than `Odometer`; 97% of them have one, so they are not skipped
-- The systemd service uses `xvfb-run --auto-servernum` — no manual Xvfb setup needed
-- Ably's `auth_url` requires the same session cookies as the scraping client (Autura gates `/ably-auth`), so the realtime client forwards them explicitly — a fresh/unauthenticated request to `auth_url` gets a 403
+- **Inspection lookups run one at a time, on purpose.** The Texas inspection site keeps each session's last search on the server, and its detail page only asks for "row N of my last search". In parallel, lookups got answers from each other's searches and saved the wrong car's mileage: 6 of 8 VINs wrong, reproduced by `dump_inspection.py`. Lookups are now sequential (about 0.5 s per VIN), and every page is checked for the searched VIN before saving.
+- **Autura gates its Ably tokens behind our login,** so the realtime client sends the scraper's session cookies to `/ably-auth`.
+- **Photos come from Autura's CDN in three sizes:** 320 px, 1280 px and 1920 px. Lists use the smallest, cards and the gallery the middle size, and only the full-screen viewer loads full size.
+- **Bidder privacy:** Autura's bid payloads include bidder names and emails. SwiftLot never stores or forwards them; only amounts and times leave the backend.
